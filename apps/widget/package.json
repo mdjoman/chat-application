@@ -1,0 +1,23 @@
+{
+  "name": "@chat/widget",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/chat-widget.js",
+  "scripts": {
+    "dev": "tsup --watch",
+    "build": "tsup && node -e \"const fs=require('fs');const p='dist/chat-widget.global.js';if(fs.existsSync(p)){fs.renameSync(p,'dist/chat-widget.js')}const m='dist/chat-widget.global.js.map';if(fs.existsSync(m)){fs.renameSync(m,'dist/chat-widget.js.map')}\"",
+    "lint": "eslint src --ext .ts,.tsx",
+    "serve:demo": "npx --yes serve -l 5173 ."
+  },
+  "dependencies": {
+    "@preact/signals": "^2.11.3",
+    "preact": "^10.20.2",
+    "socket.io-client": "^4.7.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "tsup": "^8.0.2",
+    "typescript": "^5.4.3"
+  }
+}

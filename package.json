@@ -1,0 +1,20 @@
+{
+  "name": "chat-platform",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@8.15.4",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "dev:api": "pnpm --filter @chat/api dev",
+    "dev:widget": "pnpm --filter @chat/widget dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "migrate": "pnpm --filter @chat/api migrate",
+    "migrate:rollback": "pnpm --filter @chat/api migrate:rollback"
+  }
+}
+
+
