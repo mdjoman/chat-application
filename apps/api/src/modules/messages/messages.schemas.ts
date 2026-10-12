@@ -1,9 +1,6 @@
 import { z } from 'zod';
 
-export const IdParamSchema = z.object({
-  id: z.coerce.number().int().positive(),
-});
-
+export const IdParamSchema = z.object({ id: z.coerce.number().int().positive() });
 export const ConversationIdParamSchema = z.object({
   conversationId: z.coerce.number().int().positive(),
 });
@@ -36,4 +33,14 @@ export const ReactionSchema = z.object({
 
 export const ReadSchema = z.object({
   messageIds: z.array(z.coerce.number().int().positive()).min(1).max(500),
+});
+export const PinSchema = z.object({
+  pinned: z.boolean(),
+});
+
+export const ForwardSchema = z.object({
+  targetConversationIds: z
+    .array(z.coerce.number().int().positive())
+    .min(1)
+    .max(10),
 });

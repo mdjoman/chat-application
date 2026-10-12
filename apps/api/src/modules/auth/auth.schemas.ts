@@ -30,5 +30,16 @@ export const LogoutSchema = z.object({
   refreshToken: z.string().min(20).optional(),
 });
 
-export type RegisterInput = z.infer<typeof RegisterSchema>;
-export type LoginInput = z.infer<typeof LoginSchema>;
+export const PasswordResetRequestSchema = z.object({
+  tenantSlug: z.string().min(1).max(64),
+  identifier: z.string().min(1).max(190),
+});
+
+export const PasswordResetConfirmSchema = z.object({
+  token: z.string().min(20),
+  newPassword: z.string().min(8).max(128),
+});
+
+export const PasswordResetValidateSchema = z.object({
+  token: z.string().min(20),
+});

@@ -12,21 +12,15 @@ export interface ChatWidgetFeatures {
   messageForward: boolean;
   messageEdit: boolean;
   messageDelete: boolean;
+  messagePin: boolean;
 }
 
 export interface ChatWidgetConfig {
   appId: string;
   userId: string;
-  /**
-   * Widget token issued by the host backend (HS256 JWT signed with
-   * WIDGET_SHARED_SECRET). Optional — if missing or invalid and
-   * `allowLogin` is true, the widget shows a login form instead.
-   */
   token?: string;
   apiBaseUrl: string;
-  /** Tenant slug used for the direct login flow (defaults to "default"). */
   tenantSlug?: string;
-  /** If true, show login form when widget-token auth fails. */
   allowLogin?: boolean;
   theme?: 'light' | 'dark' | 'auto';
   position?: 'bottom-right' | 'bottom-left';
@@ -51,6 +45,18 @@ export interface ConversationMember {
   role: 'owner' | 'admin' | 'member';
   joinedAt: string;
   lastReadAt: string | null;
+  username: string;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
+export interface LastMessagePreview {
+  id: number;
+  senderId: number | null;
+  type: string;
+  content: string | null;
+  deleted: boolean;
+  createdAt: string;
 }
 
 export interface Conversation {
@@ -64,6 +70,8 @@ export interface Conversation {
   updatedAt: string;
   members: ConversationMember[];
   myRole?: string;
+  lastMessage: LastMessagePreview | null;
+  unreadCount: number;
 }
 
 export interface MessageReaction {
@@ -83,6 +91,7 @@ export interface Message {
   forwardedFromId: number | null;
   editedAt: string | null;
   deletedAt: string | null;
+  pinnedAt?: string | null;
   createdAt: string;
   clientId?: string;
   reactions?: MessageReaction[];

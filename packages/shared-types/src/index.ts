@@ -63,6 +63,7 @@ export interface MessageDTO {
   forwardedFromId: number | null;
   editedAt: string | null;
   deletedAt: string | null;
+  pinnedAt?: string | null;
   createdAt: string;
   clientId?: string;
   reactions?: MessageReactionDTO[];

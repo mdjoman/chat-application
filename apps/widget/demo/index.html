@@ -5,108 +5,102 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Chat Widget — Host Site Demo</title>
   <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      margin: 0; padding: 40px; background: #f9fafb; color: #111827;
-    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 40px; background: #FFFFFF; color: #111827; }
     h1 { margin: 0 0 12px; }
-    p  { max-width: 640px; line-height: 1.6; color: #4b5563; }
-    .card {
-      background: white; border: 1px solid #e5e7eb;
-      border-radius: 12px; padding: 24px; max-width: 640px;
-      box-shadow: 0 1px 3px rgba(0,0,0,.05);
-    }
-    button.demo {
-      padding: 8px 14px; border-radius: 8px; border: 1px solid #d1d5db;
-      background: white; cursor: pointer; margin-right: 8px;
-    }
-    button.demo:hover { background: #f3f4f6; }
-    code {
-      background: #f3f4f6; padding: 2px 6px; border-radius: 4px;
-      font-size: 13px;
-    }
-    #boot-status {
-      margin-top: 12px; font-size: 12px; color: #6b7280;
-    }
-    #boot-status[data-state="error"] { color: #b91c1c; }
-    #boot-status[data-state="ok"]    { color: #047857; }
+    p { max-width: 680px; line-height: 1.6; color: #4B5563; }
+    .card { background: white; border: 1px solid #E5E7EB; border-radius: 16px; padding: 28px; max-width: 680px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    button.demo { padding: 9px 16px; border-radius: 10px; border: 1px solid #E5E7EB; background: white; cursor: pointer; margin-right: 8px; margin-bottom: 8px; }
+    button.demo:hover { background: #F7F7F9; }
+    button.demo.primary { background: #EC4899; color: white; border-color: #EC4899; }
+    button.demo.primary:hover { background: #DB2777; }
+    code { background: #F7F7F9; padding: 2px 6px; border-radius: 6px; font-size: 13px; }
+    #boot-status { margin-top: 12px; font-size: 12px; color: #6B7280; }
+    #boot-status[data-state="error"] { color: #B91C1C; }
+    #boot-status[data-state="ok"] { color: #047857; }
   </style>
 </head>
 <body>
   <div class="card">
-    <div id="boot-status"></div>
+    <h1>Host Site</h1>
+    <p>
+      This is a demo host page. The widget is loaded from a single script tag
+      and mounted in an isolated Shadow DOM. Sign in, reload, and you'll be
+      silently back in with all your history restored.
+    </p>
+    <div style="margin-top: 16px;">
+      <button class="demo primary" onclick="ChatWidget.open()">Open widget</button>
+      <button class="demo" onclick="ChatWidget.close()">Close widget</button>
+      <button class="demo" onclick="ChatWidget.logout(); location.reload();">Logout &amp; reload</button>
+      <button class="demo" onclick="ChatWidget.requestNotificationPermission()">Enable notifications</button>
+      <button class="demo" onclick="triggerReset()">Simulate password-reset link</button>
+    </div>
+    <div id="boot-status">Loading widget…</div>
   </div>
 
   <script
     src="../dist/chat-widget.js"
     onload="window.__widgetLoaded = true; window.dispatchEvent(new Event('widget-script-loaded'))"
-    onerror="document.getElementById('boot-status').textContent='Failed to load chat-widget.js (404?)'; document.getElementById('boot-status').setAttribute('data-state','error')"
+    onerror="document.getElementById('boot-status').textContent='Failed to load chat-widget.js'; document.getElementById('boot-status').setAttribute('data-state','error')"
   ></script>
 
   <script>
     async function boot() {
       const status = document.getElementById('boot-status');
-
       if (typeof ChatWidget === 'undefined') {
-        status.textContent = 'ChatWidget not defined — chat-widget.js failed to load.';
+        status.textContent = 'ChatWidget not defined';
         status.setAttribute('data-state', 'error');
         return;
       }
-
       try {
         status.textContent = 'Initializing widget…';
-
         await ChatWidget.init({
           appId: 'demo-app',
-          userId: 'demo-user',       // not used in login flow
-          // No `token` provided → widget shows login form.
+          userId: 'demo-user',
           allowLogin: true,
           tenantSlug: 'default',
           apiBaseUrl: 'http://localhost:3000',
           theme: 'auto',
           position: 'bottom-right',
-          primaryColor: '#6366f1',
+          primaryColor: '#EC4899',
           features: {
-            chat: true,
-            messageReaction: true,
-            messageReply: true,
-            messageDelete: true,
+            chat: true, groupChat: true,
+            messageReaction: true, messageReply: true,
+            messageEdit: true, messageDelete: true,
+            fileUpload: true, voiceMessage: true,
           },
         });
 
-        ChatWidget.on('authenticated', (p) => {
-          console.log('[demo] authenticated', p);
-          status.textContent = 'Authenticated — click the bubble (bottom-right).';
+        ChatWidget.on('authenticated', () => {
+          status.textContent = 'Signed in — click the bubble (bottom-right).';
           status.setAttribute('data-state', 'ok');
         });
         ChatWidget.on('needsAuth', () => {
           status.textContent = 'Please sign in using the widget form.';
           status.setAttribute('data-state', 'ok');
+          ChatWidget.open();
         });
-        ChatWidget.on('ready', (p) => console.log('[demo] ready', p));
-        ChatWidget.on('message', (m) => console.log('[demo] message', m));
         ChatWidget.on('error', (e) => console.error('[demo] error', e));
-
-        // Auto-open the widget so the login form is immediately visible.
-        ChatWidget.open();
       } catch (err) {
-        console.error('[demo] init failed', err);
         status.textContent = 'Init failed: ' + (err && err.message ? err.message : err);
         status.setAttribute('data-state', 'error');
       }
     }
 
-    if (window.__widgetLoaded) {
-      window.addEventListener('DOMContentLoaded', boot);
-    } else {
-      window.addEventListener('widget-script-loaded', () => {
-        if (document.readyState === 'loading') {
-          window.addEventListener('DOMContentLoaded', boot, { once: true });
-        } else {
-          boot();
-        }
-      });
+    function triggerReset() {
+      // Simulates the user clicking a link like:
+      //   https://yoursite.com/?reset=TOKEN
+      const token = prompt('Paste a reset token (from dev logs) to test the reset flow:');
+      if (!token) return;
+      const url = new URL(window.location.href);
+      url.searchParams.set('reset', token);
+      window.location.href = url.toString();
     }
+
+    if (window.__widgetLoaded) window.addEventListener('DOMContentLoaded', boot);
+    else window.addEventListener('widget-script-loaded', () => {
+      if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', boot, { once: true });
+      else boot();
+    });
   </script>
 </body>
 </html>

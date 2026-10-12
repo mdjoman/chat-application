@@ -1,13 +1,16 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
-import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { ConflictError, ForbiddenError, UnauthorizedError } from '../../utils/errors.js';
 import { authenticate } from '../../middleware/authenticate.js';
 import { AuthService } from './auth.service.js';
+import { PasswordResetService } from './password-reset.service.js';
 import {
   LoginSchema,
   LogoutSchema,
+  PasswordResetConfirmSchema,
+  PasswordResetRequestSchema,
+  PasswordResetValidateSchema,
   RefreshSchema,
   RegisterSchema,
   WidgetTokenSchema,
@@ -25,6 +28,7 @@ function ctxFrom(req: FastifyRequest) {
 const authRoutes: FastifyPluginAsync = async (fastify) => {
   const auth = new AuthService(fastify.db, fastify.redis);
   const tokens = new TokenService(fastify.db, fastify.redis);
+  const reset = new PasswordResetService(fastify.db, fastify.redis);
   const requireAuth = authenticate(tokens);
 
   const resolveTenantId = async (slug: string): Promise<number> => {
@@ -73,11 +77,10 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post('/auth/logout', { preHandler: requireAuth }, async (req, reply) => {
     const body = LogoutSchema.safeParse(req.body ?? {});
-    const auth_ctx = req.auth!;
-    // Compute remaining TTL of the access token (best effort)
+    const authCtx = req.auth!;
     let ttlSeconds = env.JWT_ACCESS_TTL;
     try {
-      const [, payload] = auth_ctx.raw.split('.');
+      const [, payload] = authCtx.raw.split('.');
       const decoded = JSON.parse(Buffer.from(payload!, 'base64url').toString('utf8'));
       if (decoded.exp) ttlSeconds = Math.max(0, decoded.exp - Math.floor(Date.now() / 1000));
     } catch {
@@ -85,13 +88,13 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
     await auth.logout({
       refreshToken: body.success ? body.data.refreshToken : undefined,
-      accessJti: auth_ctx.jti,
+      accessJti: authCtx.jti,
       accessTtlSeconds: ttlSeconds,
     });
     return reply.status(204).send();
   });
 
-  fastify.get('/auth/me', { preHandler: requireAuth }, async (req) => {
+   fastify.get('/auth/me', { preHandler: requireAuth }, async (req) => {
     const { userId, tenantId, role } = req.auth!;
     const row = await fastify.db('users')
       .where({ tenant_id: tenantId, id: userId })
@@ -108,13 +111,29 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     };
   });
 
-  fastify.post('/auth/widget-session', async (req) => {
-    const { widgetToken } = WidgetTokenSchema.parse(req.body);
-    return auth.widgetLogin(widgetToken, ctxFrom(req));
+  // ---- Password reset ----
+
+  fastify.post('/auth/password-reset/request', async (req) => {
+    const body = PasswordResetRequestSchema.parse(req.body);
+    const tenantId = await resolveTenantId(body.tenantSlug);
+    return reset.request({
+      tenantId,
+      identifier: body.identifier,
+      ip: req.ip,
+    });
+  });
+
+  fastify.post('/auth/password-reset/confirm', async (req) => {
+    const body = PasswordResetConfirmSchema.parse(req.body);
+    return reset.confirm({ token: body.token, newPassword: body.newPassword });
+  });
+
+  fastify.get('/auth/password-reset/validate', async (req) => {
+    const { token } = PasswordResetValidateSchema.parse(req.query);
+    return reset.validateToken(token);
   });
 };
 
 export default authRoutes;
 
-// Ensure unused import isn't a TS error
-void z;
+void ConflictError;

@@ -12,6 +12,7 @@ const SendSchema = z.object({
   content: z.string().max(8000).nullable().optional(),
   replyToId: z.coerce.number().int().positive().nullable().optional(),
   clientId: z.string().max(64).optional(),
+  attachmentIds: z.array(z.coerce.number().int().positive()).max(5).optional(),
 });
 
 export async function registerMessageHandlers(
@@ -22,27 +23,21 @@ export async function registerMessageHandlers(
   const service = new MessagesService(app.db);
   const convos = new ConversationsRepository(app.db);
 
-  // Auto-join rooms for conversations the user already belongs to.
   const memberships: Array<{ conversation_id: number }> = await app
     .db('conversation_members')
     .where({ user_id: ctx.userId })
     .whereNull('left_at')
     .select('conversation_id');
 
-  for (const m of memberships) {
-    socket.join(`t:${ctx.tenantId}:c:${m.conversation_id}`);
-  }
+  for (const m of memberships) socket.join(`t:${ctx.tenantId}:c:${m.conversation_id}`);
 
-  // --- Join a conversation on demand ---
-  socket.on('conversation:join', async (payload, ack) => {
+    socket.on('conversation:created', async (payload, ack) => {
     try {
       const { conversationId } = z
         .object({ conversationId: z.coerce.number().int().positive() })
         .parse(payload);
-
       const member = await convos.getMember(conversationId, ctx.userId);
       if (!member) return ack?.({ error: 'NOT_A_MEMBER' });
-
       socket.join(`t:${ctx.tenantId}:c:${conversationId}`);
       ack?.({ ok: true });
     } catch {
@@ -50,23 +45,27 @@ export async function registerMessageHandlers(
     }
   });
 
-  socket.on('conversation:leave', async (payload, ack) => {
+  socket.on('conversation:join', async (payload, ack) => {
     try {
-      const { conversationId } = z
-        .object({ conversationId: z.coerce.number().int().positive() })
-        .parse(payload);
-      socket.leave(`t:${ctx.tenantId}:c:${conversationId}`);
+      const { conversationId } = z.object({ conversationId: z.coerce.number().int().positive() }).parse(payload);
+      const member = await convos.getMember(conversationId, ctx.userId);
+      if (!member) return ack?.({ error: 'NOT_A_MEMBER' });
+      socket.join(`t:${ctx.tenantId}:c:${conversationId}`);
       ack?.({ ok: true });
-    } catch {
-      ack?.({ error: 'INVALID_PAYLOAD' });
-    }
+    } catch { ack?.({ error: 'INVALID_PAYLOAD' }); }
   });
 
-  // --- Send message ---
+  socket.on('conversation:leave', async (payload, ack) => {
+    try {
+      const { conversationId } = z.object({ conversationId: z.coerce.number().int().positive() }).parse(payload);
+      socket.leave(`t:${ctx.tenantId}:c:${conversationId}`);
+      ack?.({ ok: true });
+    } catch { ack?.({ error: 'INVALID_PAYLOAD' }); }
+  });
+
   socket.on('message:send', async (payload, ack) => {
     try {
       const parsed = SendSchema.parse(payload);
-
       const dto = await service.create({
         tenantId: ctx.tenantId,
         conversationId: parsed.conversationId,
@@ -74,33 +73,26 @@ export async function registerMessageHandlers(
         type: parsed.type,
         content: parsed.content ?? null,
         replyToId: parsed.replyToId ?? null,
+        attachmentIds: parsed.attachmentIds ?? [],
       });
-
       if (parsed.clientId) dto.clientId = parsed.clientId;
-
       const room = `t:${ctx.tenantId}:c:${parsed.conversationId}`;
       socket.to(room).emit('message:new', dto);
       socket.emit('message:new', dto);
-
       ack?.({ ok: true, message: dto });
     } catch (err) {
-      app.log.warn({ err }, 'message:send failed');
       const message = err instanceof Error ? err.message : String(err);
       ack?.({ error: 'SEND_FAILED', message });
       socket.emit('error', { code: 'SEND_FAILED', message });
     }
   });
 
-  // --- Edit ---
   socket.on('message:edit', async (payload, ack) => {
     try {
-      const parsed = z
-        .object({
-          messageId: z.coerce.number().int().positive(),
-          content: z.string().min(1).max(8000),
-        })
-        .parse(payload);
-
+      const parsed = z.object({
+        messageId: z.coerce.number().int().positive(),
+        content: z.string().min(1).max(8000),
+      }).parse(payload);
       const dto = await service.edit(ctx.tenantId, ctx.userId, parsed.messageId, parsed.content);
       const room = `t:${ctx.tenantId}:c:${dto.conversationId}`;
       socket.to(room).emit('message:updated', dto);
@@ -112,18 +104,12 @@ export async function registerMessageHandlers(
     }
   });
 
-  // --- Delete ---
   socket.on('message:delete', async (payload, ack) => {
     try {
-      const parsed = z
-        .object({ messageId: z.coerce.number().int().positive() })
-        .parse(payload);
-
+      const parsed = z.object({ messageId: z.coerce.number().int().positive() }).parse(payload);
       const row = await service.loadByIdOrThrow(ctx.tenantId, parsed.messageId);
       const conversationId = row.conversation_id;
-
       await service.delete(ctx.tenantId, ctx.userId, parsed.messageId);
-
       const out = { messageId: parsed.messageId, conversationId };
       const room = `t:${ctx.tenantId}:c:${conversationId}`;
       socket.to(room).emit('message:deleted', out);
@@ -135,32 +121,18 @@ export async function registerMessageHandlers(
     }
   });
 
-  // --- React ---
   socket.on('message:react', async (payload, ack) => {
     try {
-      const parsed = z
-        .object({
-          messageId: z.coerce.number().int().positive(),
-          reaction: z.string().min(1).max(16),
-          added: z.boolean().default(true),
-        })
-        .parse(payload);
-
+      const parsed = z.object({
+        messageId: z.coerce.number().int().positive(),
+        reaction: z.string().min(1).max(16),
+        added: z.boolean().default(true),
+      }).parse(payload);
       const row = await service.loadByIdOrThrow(ctx.tenantId, parsed.messageId);
       const conversationId = row.conversation_id;
-
-      if (parsed.added) {
-        await service.react(ctx.tenantId, ctx.userId, parsed.messageId, parsed.reaction);
-      } else {
-        await service.unreact(ctx.tenantId, ctx.userId, parsed.messageId, parsed.reaction);
-      }
-
-      const out = {
-        messageId: parsed.messageId,
-        userId: ctx.userId,
-        reaction: parsed.reaction,
-        added: parsed.added,
-      };
+      if (parsed.added) await service.react(ctx.tenantId, ctx.userId, parsed.messageId, parsed.reaction);
+      else await service.unreact(ctx.tenantId, ctx.userId, parsed.messageId, parsed.reaction);
+      const out = { messageId: parsed.messageId, userId: ctx.userId, reaction: parsed.reaction, added: parsed.added };
       const room = `t:${ctx.tenantId}:c:${conversationId}`;
       socket.to(room).emit('message:reaction', out);
       socket.emit('message:reaction', out);
@@ -171,28 +143,14 @@ export async function registerMessageHandlers(
     }
   });
 
-  // --- Read receipts ---
   socket.on('message:read', async (payload, ack) => {
     try {
-      const parsed = z
-        .object({
-          conversationId: z.coerce.number().int().positive(),
-          messageIds: z.array(z.coerce.number().int().positive()).min(1).max(500),
-        })
-        .parse(payload);
-
-      const ids = await service.markRead(
-        ctx.tenantId,
-        ctx.userId,
-        parsed.conversationId,
-        parsed.messageIds,
-      );
-
-      const out = {
-        conversationId: parsed.conversationId,
-        userId: ctx.userId,
-        messageIds: ids,
-      };
+      const parsed = z.object({
+        conversationId: z.coerce.number().int().positive(),
+        messageIds: z.array(z.coerce.number().int().positive()).min(1).max(500),
+      }).parse(payload);
+      const ids = await service.markRead(ctx.tenantId, ctx.userId, parsed.conversationId, parsed.messageIds);
+      const out = { conversationId: parsed.conversationId, userId: ctx.userId, messageIds: ids };
       const room = `t:${ctx.tenantId}:c:${parsed.conversationId}`;
       socket.to(room).emit('message:read', out);
       socket.emit('message:read', out);

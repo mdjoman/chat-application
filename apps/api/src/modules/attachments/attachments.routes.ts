@@ -1,14 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { createReadStream } from 'node:fs';
+import fs from 'node:fs';
 import { z } from 'zod';
 
 import { authenticate } from '../../middleware/authenticate.js';
 import { TokenService } from '../auth/token.service.js';
 import { AttachmentsService } from './attachments.service.js';
+import { ForbiddenError, ValidationError } from '../../utils/errors.js';
 
-const IdParamSchema = z.object({
-  id: z.coerce.number().int().positive(),
-});
+const IdParam = z.object({ id: z.coerce.number().int().positive() });
 
 const attachmentsRoutes: FastifyPluginAsync = async (fastify) => {
   const tokens = new TokenService(fastify.db, fastify.redis);
@@ -16,47 +15,39 @@ const attachmentsRoutes: FastifyPluginAsync = async (fastify) => {
   const auth = authenticate(tokens);
 
   fastify.post('/attachments/upload', { preHandler: auth }, async (req, reply) => {
-    const { userId, tenantId } = req.auth!;
+    const { tenantId, userId } = req.auth!;
     const file = await req.file();
-    if (!file) {
-      return reply.status(400).send({ error: { code: 'NO_FILE', message: 'No file part' } });
-    }
-    const buffer = await file.toBuffer();
-    const result = await service.upload({
+    if (!file) throw new ValidationError('No file part in request');
+
+    const dto = await service.upload({
       tenantId,
       userId,
-      buffer,
-      mimeType: file.mimetype,
-      originalName: file.filename,
+      stream: file.file,
+      originalName: file.filename || 'upload.bin',
+      declaredMime: file.mimetype,
     });
-    return reply.status(201).send(result);
+
+    return reply.status(201).send(dto);
   });
 
   fastify.get('/attachments/:id', async (req, reply) => {
-    // Downloads are authenticated by bearer OR by a signed URL later.
-    // For Phase 4 we allow GET without auth (URL is randomized via id + storage key).
-    // NOTE: Phase 6 will add signed URLs.
-    const { id } = IdParamSchema.parse(req.params);
-    // tenantId: derive from token if provided; fallback to default tenant
-    let tenantId = 1;
-    const header = req.headers.authorization;
-    if (header?.startsWith('Bearer ')) {
-      try {
-        const claims = await tokens.verifyAccessToken(header.slice(7).trim());
-        tenantId = Number(claims.tenantId);
-      } catch {
-        /* ignore — fall through to default */
-      }
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      throw new ForbiddenError('Missing bearer token');
     }
-    const { row, absPath } = await service.getForDownload(tenantId, id);
+    const claims = await tokens.verifyAccessToken(authHeader.slice(7).trim());
+    const tenantId = Number(claims.tenantId);
 
-    reply.header('content-type', row.mime_type);
-    reply.header(
-      'content-disposition',
-      `inline; filename="${(row.original_name ?? 'file').replace(/"/g, '')}"`,
-    );
-    if (row.size_bytes) reply.header('content-length', String(row.size_bytes));
-    return reply.send(createReadStream(absPath));
+    const { id } = IdParam.parse(req.params);
+    const info = await service.getForDownload(tenantId, id);
+
+    reply
+      .header('content-type', info.mimeType)
+      .header('content-length', info.sizeBytes)
+      .header('cache-control', 'private, max-age=3600')
+      .header('content-disposition', `inline; filename="${(info.originalName ?? 'file').replace(/"/g, '')}"`);
+
+    return reply.send(fs.createReadStream(info.absPath));
   });
 };
 

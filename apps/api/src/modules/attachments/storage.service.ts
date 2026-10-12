@@ -1,83 +1,69 @@
-import fs from 'node:fs/promises';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
+import type { Readable } from 'node:stream';
+
 import { env } from '../../config/env.js';
 
 export interface StoredFile {
   key: string;
+  absPath: string;
   size: number;
-  contentType: string;
-  originalName?: string;
+  sha256: string;
 }
 
-export interface StorageService {
-  upload(buffer: Buffer, opts: {
-    tenantId: number;
-    mimeType: string;
-    originalName?: string;
-  }): Promise<StoredFile>;
-  delete(key: string): Promise<void>;
-  absolutePath(key: string): string;
-  exists(key: string): Promise<boolean>;
-}
+export class StorageService {
+  private readonly root: string;
 
-const ROOT = env.STORAGE_LOCAL_DIR || path.resolve(process.cwd(), 'storage');
+  constructor() {
+    this.root = path.resolve(process.cwd(), env.UPLOAD_DIR);
+    fs.mkdirSync(this.root, { recursive: true });
+  }
 
-/**
- * Local filesystem storage. Swap for S3StorageService later
- * without touching message/attachment logic.
- */
-export class LocalStorageService implements StorageService {
-  async upload(buffer: Buffer, opts: {
+  async save(opts: {
     tenantId: number;
+    stream: Readable;
+    originalName: string;
     mimeType: string;
-    originalName?: string;
   }): Promise<StoredFile> {
-    const ext = extFromMime(opts.mimeType) || path.extname(opts.originalName || '') || '';
-    const key = `${opts.tenantId}/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}${ext}`;
-    const full = path.join(ROOT, key);
-    await fs.mkdir(path.dirname(full), { recursive: true });
-    await fs.writeFile(full, buffer);
-    return { key, size: buffer.length, contentType: opts.mimeType, originalName: opts.originalName };
+    const now = new Date();
+    const rel = path.join(
+      `t${opts.tenantId}`,
+      String(now.getUTCFullYear()),
+      String(now.getUTCMonth() + 1).padStart(2, '0'),
+      `${crypto.randomUUID()}${path.extname(opts.originalName).slice(0, 10)}`,
+    );
+    const absPath = path.join(this.root, rel);
+
+    await fsp.mkdir(path.dirname(absPath), { recursive: true });
+
+    const hash = crypto.createHash('sha256');
+    let size = 0;
+
+    const out = fs.createWriteStream(absPath);
+    opts.stream.on('data', (chunk: Buffer) => {
+      hash.update(chunk);
+      size += chunk.length;
+    });
+    await pipeline(opts.stream, out);
+
+    return { key: rel, absPath, size, sha256: hash.digest('hex') };
   }
 
-  async delete(key: string): Promise<void> {
-    try {
-      await fs.unlink(path.join(ROOT, key));
-    } catch {
-      /* ignore */
-    }
-  }
-
-  absolutePath(key: string): string {
-    return path.join(ROOT, key);
+  absPath(key: string): string {
+    const safe = path.normalize(key).replace(/^(\.\.[/\\])+/, '');
+    return path.join(this.root, safe);
   }
 
   async exists(key: string): Promise<boolean> {
-    try {
-      await fs.access(path.join(ROOT, key));
-      return true;
-    } catch {
-      return false;
-    }
+    try { await fsp.access(this.absPath(key)); return true; } catch { return false; }
+  }
+
+  async delete(key: string): Promise<void> {
+    try { await fsp.unlink(this.absPath(key)); } catch { /* ignore */ }
   }
 }
 
-export const storage: StorageService = new LocalStorageService();
-
-function extFromMime(mime: string): string {
-  const map: Record<string, string> = {
-    'image/jpeg': '.jpg',
-    'image/png': '.png',
-    'image/webp': '.webp',
-    'image/gif': '.gif',
-    'video/mp4': '.mp4',
-    'video/webm': '.webm',
-    'audio/webm': '.webm',
-    'audio/ogg': '.ogg',
-    'audio/mpeg': '.mp3',
-    'application/pdf': '.pdf',
-    'text/plain': '.txt',
-  };
-  return map[mime] ?? '';
-}
+export const storage = new StorageService();

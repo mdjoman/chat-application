@@ -5,6 +5,7 @@ import { ForbiddenError, NotFoundError } from '../../utils/errors.js';
 import { buildPage, decodeCursor, type CursorPage } from '../../utils/pagination.js';
 import { ConversationsRepository } from '../conversations/conversations.repository.js';
 import { MessagesRepository, type MessageRow } from './messages.repository.js';
+import { AttachmentsService } from '../attachments/attachments.service.js';
 import type { MessageDTO, MessageType } from '@chat/shared-types';
 
 export interface CreateMessageInput {
@@ -14,28 +15,32 @@ export interface CreateMessageInput {
   type?: MessageType;
   content?: string | null;
   replyToId?: number | null;
+  attachmentIds?: number[];
 }
 
 export class MessagesService {
   private readonly repo: MessagesRepository;
   private readonly convos: ConversationsRepository;
+  private readonly attachments: AttachmentsService;
 
   constructor(private readonly db: Knex) {
     this.repo = new MessagesRepository(db);
     this.convos = new ConversationsRepository(db);
+    this.attachments = new AttachmentsService(db);
   }
 
-  // ---------- Send ----------
   async create(input: CreateMessageInput): Promise<MessageDTO> {
     const member = await this.convos.getMember(input.conversationId, input.senderId);
     if (!member) throw new ForbiddenError('Not a member of this conversation');
 
     const type: MessageType = input.type ?? 'text';
     const content = (input.content ?? '').toString().slice(0, 8000);
+    const attachmentIds = input.attachmentIds ?? [];
 
-    if (type === 'text' && content.trim().length === 0) {
+    if (type === 'text' && content.trim().length === 0 && attachmentIds.length === 0) {
       throw new ForbiddenError('Empty message');
     }
+    if (attachmentIds.length > 5) throw new ForbiddenError('Too many attachments');
 
     if (input.replyToId) {
       const parent = await this.repo.findById(input.tenantId, input.replyToId);
@@ -45,9 +50,6 @@ export class MessagesService {
     }
 
     const messageUuid = randomUUID();
-
-    // Everything the transaction needs is captured *before* the transaction
-    // runs, so there is no reference to outer bindings from inside the callback.
     const tenantId = input.tenantId;
     const conversationId = input.conversationId;
     const senderId = input.senderId;
@@ -64,46 +66,48 @@ export class MessagesService {
         replyToId,
       });
 
-      // Bump the conversation's last_message_at
+      if (attachmentIds.length > 0) {
+        await this.attachments.attachToMessage(trx, tenantId, insertedId, attachmentIds);
+      }
+
       await trx('conversations')
         .where({ tenant_id: tenantId, id: conversationId })
-        .update({
-          last_message_at: trx.fn.now(),
-          updated_at: trx.fn.now(),
-        });
+        .update({ last_message_at: trx.fn.now(), updated_at: trx.fn.now() });
 
-      // Sender's own message status = read
       await this.repo.upsertStatus(trx, insertedId, senderId, 'read');
 
-      // Everyone else gets 'sent' initially
       const members: Array<{ user_id: number }> = await trx('conversation_members')
         .where({ conversation_id: conversationId })
         .whereNull('left_at')
         .select('user_id');
-
       for (const m of members) {
         if (m.user_id === senderId) continue;
         await this.repo.upsertStatus(trx, insertedId, m.user_id, 'sent');
       }
-
       return insertedId;
     });
 
     const row = await this.repo.findById(tenantId, newMessageId);
     if (!row) throw new Error('Message vanished after insert');
-    return this.toDTO(row);
+    const attachMap = await this.attachments.loadForMessages(tenantId, [newMessageId]);
+    return this.toDTO(row, undefined, attachMap.get(newMessageId) ?? []);
   }
 
-  // ---------- History ----------
-  async history(
+    async history(
     tenantId: number,
     userId: number,
     conversationId: number,
     limit = 30,
     cursor?: string,
   ): Promise<CursorPage<MessageDTO>> {
+    // Any member who has *ever* been in the conversation (even left)
+    // can read messages sent while they were a member.
+    // New members added later can read history from the conversation's start.
+    // If you want to restrict new members to only messages after they joined,
+    // replace getMember with getMemberHistory and filter by `joined_at`.
     const member = await this.convos.getMember(conversationId, userId);
-    if (!member) throw new ForbiddenError('Not a member');
+    const historical = member ?? (await this.convos.getMemberHistory(conversationId, userId));
+    if (!historical) throw new ForbiddenError('Not a member');
 
     const cursorId = cursor ? Number(decodeCursor(cursor)) : null;
     const rows = await this.repo.listByConversation(tenantId, conversationId, limit, cursorId);
@@ -111,7 +115,7 @@ export class MessagesService {
 
     const ids = page.items.map((r) => r.id);
     const reactions = await this.repo.reactionsFor(ids);
-    const attachments = await this.repo.attachmentsFor(ids);
+    const attachMap = await this.attachments.loadForMessages(tenantId, ids);
 
     const reactionMap = new Map<number, MessageDTO['reactions']>();
     for (const r of reactions) {
@@ -124,22 +128,6 @@ export class MessagesService {
       reactionMap.set(r.message_id, arr);
     }
 
-    const attachMap = new Map<number, MessageDTO['attachments']>();
-    for (const a of attachments) {
-      if (a.message_id == null) continue;
-      const arr = attachMap.get(a.message_id) ?? [];
-      arr.push({
-        id: a.id,
-        messageId: a.message_id,
-        mimeType: a.mime_type,
-        sizeBytes: Number(a.size_bytes),
-        originalName: a.original_name,
-        url: `/api/v1/attachments/${a.id}`,
-        metadata: (a.metadata as Record<string, unknown>) ?? null,
-      });
-      attachMap.set(a.message_id, arr);
-    }
-
     return {
       ...page,
       items: page.items.map((r) =>
@@ -148,7 +136,6 @@ export class MessagesService {
     };
   }
 
-  // ---------- Search ----------
   async search(
     tenantId: number,
     userId: number,
@@ -162,7 +149,6 @@ export class MessagesService {
     return rows.map((r) => this.toDTO(r));
   }
 
-  // ---------- Edit ----------
   async edit(
     tenantId: number,
     userId: number,
@@ -183,7 +169,6 @@ export class MessagesService {
     return this.toDTO(fresh);
   }
 
-  // ---------- Delete ----------
   async delete(tenantId: number, userId: number, messageId: number): Promise<void> {
     const row = await this.repo.findById(tenantId, messageId);
     if (!row) throw new NotFoundError('Message not found');
@@ -193,7 +178,6 @@ export class MessagesService {
 
     const isSender = row.sender_id === userId;
     const isGroupModerator = member.role === 'owner' || member.role === 'admin';
-
     if (!isSender && !isGroupModerator) {
       throw new ForbiddenError('Not allowed to delete this message');
     }
@@ -203,7 +187,6 @@ export class MessagesService {
     });
   }
 
-  // ---------- Reactions ----------
   async react(
     tenantId: number,
     userId: number,
@@ -234,21 +217,23 @@ export class MessagesService {
     const member = await this.convos.getMember(row.conversation_id, userId);
     if (!member) throw new ForbiddenError('Not a member');
 
-    const trimmed = reaction.trim().slice(0, 16);
     await this.db.transaction(async (trx) => {
-      await this.repo.removeReaction(trx, messageId, userId, trimmed);
+      await this.repo.removeReaction(trx, messageId, userId, reaction.trim().slice(0, 16));
     });
   }
 
-  // ---------- Read receipts ----------
-  async markRead(
+    async markRead(
     tenantId: number,
     userId: number,
     conversationId: number,
     messageIds: number[],
   ): Promise<number[]> {
-    const member = await this.convos.getMember(conversationId, userId);
-    if (!member) throw new ForbiddenError('Not a member');
+    // Allow both current and historical members (users who left still
+    // have their membership row). If neither exists, silently return [] —
+    // this prevents stale sockets from throwing 403s into the widget.
+    const active = await this.convos.getMember(conversationId, userId);
+    const historical = active ?? (await this.convos.getMemberHistory(conversationId, userId));
+    if (!historical) return [];
 
     const rows = await this.repo.findByIds(tenantId, messageIds);
     const validIds = rows
@@ -258,25 +243,22 @@ export class MessagesService {
 
     await this.db.transaction(async (trx) => {
       await this.repo.markRead(trx, validIds, userId);
+      // Only update last_read_at for members who haven't left.
       await trx('conversation_members')
         .where({ conversation_id: conversationId, user_id: userId })
+        .whereNull('left_at')
         .update({ last_read_at: trx.fn.now() });
     });
     return validIds;
   }
 
-  // ---------- Helpers ----------
   async loadByIdOrThrow(tenantId: number, messageId: number): Promise<MessageRow> {
     const row = await this.repo.findById(tenantId, messageId);
     if (!row) throw new NotFoundError('Message not found');
     return row;
   }
 
-  async toDTO(
-    row: MessageRow,
-    reactions?: MessageDTO['reactions'],
-    attachments?: MessageDTO['attachments'],
-  ): Promise<MessageDTO> {
+    toDTO(row: MessageRow, reactions?: MessageDTO['reactions'], attachments?: MessageDTO['attachments']): MessageDTO {
     return {
       id: row.id,
       uuid: row.uuid,
@@ -288,9 +270,76 @@ export class MessagesService {
       forwardedFromId: row.forwarded_from_id,
       editedAt: row.edited_at ? new Date(row.edited_at).toISOString() : null,
       deletedAt: row.deleted_at ? new Date(row.deleted_at).toISOString() : null,
+      pinnedAt: row.pinned_at ? new Date(row.pinned_at).toISOString() : null,
       createdAt: new Date(row.created_at).toISOString(),
       reactions,
       attachments,
     };
+  }
+
+    async pin(
+    tenantId: number,
+    userId: number,
+    messageId: number,
+    pinned: boolean,
+  ): Promise<MessageDTO> {
+    const row = await this.repo.findById(tenantId, messageId);
+    if (!row) throw new NotFoundError('Message not found');
+
+    const member = await this.convos.getMember(row.conversation_id, userId);
+    if (!member) throw new ForbiddenError('Not a member');
+
+    await this.db.transaction(async (trx) => {
+      await this.repo.setPinned(trx, tenantId, messageId, pinned ? userId : null);
+    });
+
+    const fresh = await this.repo.findById(tenantId, messageId);
+    if (!fresh) throw new NotFoundError('Message not found after update');
+    return this.toDTO(fresh);
+  }
+
+  async listPinned(tenantId: number, userId: number, conversationId: number): Promise<MessageDTO[]> {
+    const member = await this.convos.getMember(conversationId, userId);
+    if (!member) throw new ForbiddenError('Not a member');
+    const rows = await this.repo.listPinned(tenantId, conversationId);
+    return rows.map((r) => this.toDTO(r));
+  }
+
+  async forward(
+    tenantId: number,
+    userId: number,
+    messageId: number,
+    targetConversationIds: number[],
+  ): Promise<MessageDTO[]> {
+    const source = await this.repo.findById(tenantId, messageId);
+    if (!source) throw new NotFoundError('Message not found');
+
+    const sourceMember = await this.convos.getMember(source.conversation_id, userId);
+    if (!sourceMember) throw new ForbiddenError('Not a member of source conversation');
+
+    const created: MessageDTO[] = [];
+    for (const targetId of targetConversationIds) {
+      const targetMember = await this.convos.getMember(targetId, userId);
+      if (!targetMember) continue; // skip silently for non-members
+
+      const dto = await this.create({
+        tenantId,
+        conversationId: targetId,
+        senderId: userId,
+        type: source.type,
+        content: source.content,
+        replyToId: null,
+        attachmentIds: [],
+      });
+
+      // Mark as forwarded
+      await this.db('messages')
+        .where({ tenant_id: tenantId, id: dto.id })
+        .update({ forwarded_from_id: source.id });
+
+      dto.forwardedFromId = source.id;
+      created.push(dto);
+    }
+    return created;
   }
 }

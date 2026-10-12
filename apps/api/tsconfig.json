@@ -1,3 +1,4 @@
+
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
@@ -7,5 +8,5 @@
     "moduleResolution": "Bundler",
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "knexfile.ts"]
+  "include": ["src/**/*.ts"]
 }

@@ -12,21 +12,20 @@ export function mountWidget(opts: {
   position: 'bottom-right' | 'bottom-left';
   theme: 'light' | 'dark' | 'auto';
   tenantSlug: string;
+  initialResetToken?: string;
   onAuthed: () => Promise<void>;
+  onLogout: () => void;
 }): { host: HTMLElement; shadow: ShadowRoot } {
   const existing = document.getElementById('chat-widget-root');
   if (existing) existing.remove();
 
   const host = document.createElement('div');
   host.id = 'chat-widget-root';
-
   const shadow = host.attachShadow({ mode: 'open' });
 
   const resolvedTheme =
     opts.theme === 'auto'
-      ? window.matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'dark'
-        : 'light'
+      ? window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
       : opts.theme;
   host.setAttribute('data-theme', resolvedTheme);
   store.set({ theme: resolvedTheme });
@@ -55,11 +54,12 @@ export function mountWidget(opts: {
       socket={opts.socket}
       tenantSlug={opts.tenantSlug}
       onAuthed={opts.onAuthed}
+      onLogout={opts.onLogout}
+      initialResetToken={opts.initialResetToken}
     />,
     container,
   );
 
   document.body.appendChild(host);
-
   return { host, shadow };
 }

@@ -14,6 +14,8 @@ import {
   ReadSchema,
   SearchQuerySchema,
   SendMessageSchema,
+  PinSchema,
+  ForwardSchema,
 } from './messages.schemas.js';
 
 const messagesRoutes: FastifyPluginAsync = async (fastify) => {
@@ -21,7 +23,6 @@ const messagesRoutes: FastifyPluginAsync = async (fastify) => {
   const service = new MessagesService(fastify.db);
   const auth = authenticate(tokens);
 
-  // --- History (cursor-paginated) ---
   fastify.get(
     '/conversations/:conversationId/messages',
     { preHandler: auth },
@@ -33,7 +34,6 @@ const messagesRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  // --- Search within a conversation ---
   fastify.get(
     '/conversations/:conversationId/messages/search',
     { preHandler: auth },
@@ -46,7 +46,6 @@ const messagesRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  // --- Send (REST fallback; primary path is Socket.IO) ---
   fastify.post(
     '/conversations/:conversationId/messages',
     { preHandler: auth },
@@ -62,6 +61,7 @@ const messagesRoutes: FastifyPluginAsync = async (fastify) => {
         type: body.type,
         content: body.content,
         replyToId: body.replyToId ?? null,
+        attachmentIds: body.attachmentIds ?? [],
       });
 
       if (body.clientId) dto.clientId = body.clientId;
@@ -69,80 +69,56 @@ const messagesRoutes: FastifyPluginAsync = async (fastify) => {
       try {
         const io = getIO();
         io.to(`t:${tenantId}:c:${conversationId}`).emit('message:new', dto);
-      } catch {
-        /* io not initialised (tests) */
-      }
+      } catch { /* io not initialized */ }
 
       return reply.status(201).send(dto);
     },
   );
 
-  // --- Edit ---
   fastify.patch('/messages/:id', { preHandler: auth }, async (req) => {
     const { userId, tenantId } = req.auth!;
     const { id } = IdParamSchema.parse(req.params);
     const { content } = EditMessageSchema.parse(req.body);
-
     const dto = await service.edit(tenantId, userId, id, content);
-
     try {
       const io = getIO();
       io.to(`t:${tenantId}:c:${dto.conversationId}`).emit('message:updated', dto);
-    } catch {
-      /* noop */
-    }
+    } catch { /* noop */ }
     return dto;
   });
 
-  // --- Delete ---
   fastify.delete('/messages/:id', { preHandler: auth }, async (req, reply) => {
     const { userId, tenantId } = req.auth!;
     const { id } = IdParamSchema.parse(req.params);
-
-    // Load first so we still know the conversation for broadcasting.
     const row = await service.loadByIdOrThrow(tenantId, id);
     const conversationId = row.conversation_id;
-
     await service.delete(tenantId, userId, id);
-
     try {
       const io = getIO();
       io.to(`t:${tenantId}:c:${conversationId}`).emit('message:deleted', {
         messageId: id,
         conversationId,
       });
-    } catch {
-      /* noop */
-    }
+    } catch { /* noop */ }
     return reply.status(204).send();
   });
 
-  // --- Reaction add ---
   fastify.post('/messages/:id/reactions', { preHandler: auth }, async (req, reply) => {
     const { userId, tenantId } = req.auth!;
     const { id } = IdParamSchema.parse(req.params);
     const { reaction } = ReactionSchema.parse(req.body);
-
     const row = await service.loadByIdOrThrow(tenantId, id);
     const conversationId = row.conversation_id;
-
     await service.react(tenantId, userId, id, reaction);
-
     try {
       const io = getIO();
       io.to(`t:${tenantId}:c:${conversationId}`).emit('message:reaction', {
-        messageId: id,
-        userId,
-        reaction,
-        added: true,
+        messageId: id, userId, reaction, added: true,
       });
-    } catch {
-      /* noop */
-    }
+    } catch { /* noop */ }
     return reply.status(204).send();
   });
 
-  // --- Reaction remove ---
   fastify.delete(
     '/messages/:id/reactions/:reaction',
     { preHandler: auth },
@@ -150,28 +126,19 @@ const messagesRoutes: FastifyPluginAsync = async (fastify) => {
       const { userId, tenantId } = req.auth!;
       const { id } = IdParamSchema.parse(req.params);
       const params = z.object({ reaction: z.string().min(1).max(16) }).parse(req.params);
-
       const row = await service.loadByIdOrThrow(tenantId, id);
       const conversationId = row.conversation_id;
-
       await service.unreact(tenantId, userId, id, params.reaction);
-
       try {
         const io = getIO();
         io.to(`t:${tenantId}:c:${conversationId}`).emit('message:reaction', {
-          messageId: id,
-          userId,
-          reaction: params.reaction,
-          added: false,
+          messageId: id, userId, reaction: params.reaction, added: false,
         });
-      } catch {
-        /* noop */
-      }
+      } catch { /* noop */ }
       return reply.status(204).send();
     },
   );
 
-  // --- Read receipts ---
   fastify.post(
     '/conversations/:conversationId/read',
     { preHandler: auth },
@@ -179,22 +146,55 @@ const messagesRoutes: FastifyPluginAsync = async (fastify) => {
       const { userId, tenantId } = req.auth!;
       const { conversationId } = ConversationIdParamSchema.parse(req.params);
       const { messageIds } = ReadSchema.parse(req.body);
-
       const readIds = await service.markRead(tenantId, userId, conversationId, messageIds);
-
       try {
         const io = getIO();
         io.to(`t:${tenantId}:c:${conversationId}`).emit('message:read', {
-          conversationId,
-          userId,
-          messageIds: readIds,
+          conversationId, userId, messageIds: readIds,
         });
-      } catch {
-        /* noop */
-      }
+      } catch { /* noop */ }
       return reply.status(204).send();
     },
   );
+    // --- Pin / unpin ---
+  fastify.post('/messages/:id/pin', { preHandler: auth }, async (req) => {
+    const { userId, tenantId } = req.auth!;
+    const { id } = IdParamSchema.parse(req.params);
+    const { pinned } = PinSchema.parse(req.body);
+    const dto = await service.pin(tenantId, userId, id, pinned);
+    try {
+      const io = getIO();
+      io.to(`t:${tenantId}:c:${dto.conversationId}`).emit('message:updated', dto);
+    } catch { /* noop */ }
+    return dto;
+  });
+
+  // --- Pinned list ---
+  fastify.get(
+    '/conversations/:conversationId/pinned',
+    { preHandler: auth },
+    async (req) => {
+      const { userId, tenantId } = req.auth!;
+      const { conversationId } = ConversationIdParamSchema.parse(req.params);
+      const items = await service.listPinned(tenantId, userId, conversationId);
+      return { items };
+    },
+  );
+
+  // --- Forward ---
+  fastify.post('/messages/:id/forward', { preHandler: auth }, async (req, reply) => {
+    const { userId, tenantId } = req.auth!;
+    const { id } = IdParamSchema.parse(req.params);
+    const { targetConversationIds } = ForwardSchema.parse(req.body);
+    const created = await service.forward(tenantId, userId, id, targetConversationIds);
+    try {
+      const io = getIO();
+      for (const dto of created) {
+        io.to(`t:${tenantId}:c:${dto.conversationId}`).emit('message:new', dto);
+      }
+    } catch { /* noop */ }
+    return reply.status(201).send({ items: created });
+  });
 };
 
 export default messagesRoutes;

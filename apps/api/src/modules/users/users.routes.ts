@@ -1,8 +1,11 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+
 import { authenticate } from '../../middleware/authenticate.js';
 import { TokenService } from '../auth/token.service.js';
+import { AttachmentsService } from '../attachments/attachments.service.js';
 import { UsersService } from './users.service.js';
+import { ValidationError } from '../../utils/errors.js';
 import {
   IdParamSchema,
   SearchQuerySchema,
@@ -13,6 +16,7 @@ import {
 const usersRoutes: FastifyPluginAsync = async (fastify) => {
   const tokens = new TokenService(fastify.db, fastify.redis);
   const service = new UsersService(fastify.db);
+  const attachments = new AttachmentsService(fastify.db);
   const auth = authenticate(tokens);
 
   fastify.get('/users/me', { preHandler: auth }, async (req) => {
@@ -24,6 +28,27 @@ const usersRoutes: FastifyPluginAsync = async (fastify) => {
     const { userId, tenantId } = req.auth!;
     const patch = UpdateMeSchema.parse(req.body);
     return service.updateMe(tenantId, userId, patch);
+  });
+
+  fastify.post('/users/me/avatar', { preHandler: auth }, async (req) => {
+    const { userId, tenantId } = req.auth!;
+    const file = await req.file();
+    if (!file) throw new ValidationError('No file part');
+
+    if (!file.mimetype.startsWith('image/')) {
+      throw new ValidationError('Avatar must be an image');
+    }
+
+    const dto = await attachments.upload({
+      tenantId,
+      userId,
+      stream: file.file,
+      originalName: file.filename || 'avatar.png',
+      declaredMime: file.mimetype,
+    });
+
+    await service.updateMe(tenantId, userId, { avatarUrl: dto.url });
+    return { ok: true, avatarUrl: dto.url };
   });
 
   fastify.get('/users/me/settings', { preHandler: auth }, async (req) => {
@@ -38,7 +63,7 @@ const usersRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get('/users/search', { preHandler: auth }, async (req) => {
-    const { userId, tenantId } = req.auth!;
+    const { tenantId } = req.auth!;
     const { q, limit, offset } = SearchQuerySchema.parse(req.query);
     return { items: await service.search(tenantId, q, limit, offset) };
   });
@@ -51,3 +76,6 @@ const usersRoutes: FastifyPluginAsync = async (fastify) => {
 };
 
 export default usersRoutes;
+
+// Silence unused import (kept for zod type availability)
+void z;
