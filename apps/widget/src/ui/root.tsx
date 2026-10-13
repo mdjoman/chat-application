@@ -4,10 +4,12 @@ import { buildStyles } from '../styles/styles.css';
 import { store } from '../state/store';
 import type { ApiClient } from '../services/api-client';
 import type { SocketClient } from '../services/socket-client';
+import type { CallController } from '../services/call-controller';
 
 export function mountWidget(opts: {
   api: ApiClient;
   socket: SocketClient;
+  call: CallController;
   primaryColor: string;
   position: 'bottom-right' | 'bottom-left';
   theme: 'light' | 'dark' | 'auto';
@@ -52,6 +54,7 @@ export function mountWidget(opts: {
     <App
       api={opts.api}
       socket={opts.socket}
+      call={opts.call}
       tenantSlug={opts.tenantSlug}
       onAuthed={opts.onAuthed}
       onLogout={opts.onLogout}

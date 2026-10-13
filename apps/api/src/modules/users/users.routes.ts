@@ -47,8 +47,13 @@ const usersRoutes: FastifyPluginAsync = async (fastify) => {
       declaredMime: file.mimetype,
     });
 
-    await service.updateMe(tenantId, userId, { avatarUrl: dto.url });
-    return { ok: true, avatarUrl: dto.url };
+    // For avatars, generate a long-lived signed URL (1 year).
+    const { signAttachmentUrl } = await import('../attachments/signed-url.js');
+    const { env: e } = await import('../../config/env.js');
+    const longLivedUrl = signAttachmentUrl(dto.id, e.PUBLIC_API_BASE_URL, 365 * 24 * 3600);
+
+    await service.updateMe(tenantId, userId, { avatarUrl: longLivedUrl });
+    return { ok: true, avatarUrl: longLivedUrl };
   });
 
   fastify.get('/users/me/settings', { preHandler: auth }, async (req) => {

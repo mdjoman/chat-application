@@ -6,7 +6,7 @@ import { ForbiddenError, NotFoundError, ValidationError } from '../../utils/erro
 import { allowedMimeTypes, env } from '../../config/env.js';
 import { storage } from './storage.service.js';
 import { AttachmentsRepository, type AttachmentRow } from './attachments.repository.js';
-
+import { signAttachmentUrl } from './signed-url.js';
 const MAGIC: Array<{ mime: string; bytes: number[]; offset?: number }> = [
   { mime: 'image/jpeg', bytes: [0xff, 0xd8, 0xff] },
   { mime: 'image/png', bytes: [0x89, 0x50, 0x4e, 0x47] },
@@ -93,14 +93,13 @@ export class AttachmentsService {
         metadata: { sha256: stored.sha256 },
       });
     });
-
     return {
       id,
       messageId: null,
       mimeType: sniffed ?? declared,
       sizeBytes: stored.size,
       originalName: input.originalName,
-      url: `${env.PUBLIC_API_BASE_URL}/api/v1/attachments/${id}`,
+      url: signAttachmentUrl(id, env.PUBLIC_API_BASE_URL, 3600),
       metadata: { sha256: stored.sha256 },
     };
   }
@@ -152,14 +151,18 @@ export class AttachmentsService {
     };
   }
 
-  toDTO(r: AttachmentRow): AttachmentDTO {
+    toDTO(r: AttachmentRow): AttachmentDTO {
+    // Signed URL that works in <img src="...">, <video src="...">, etc.
+    // without needing an Authorization header.
+    const url = signAttachmentUrl(r.id, env.PUBLIC_API_BASE_URL, 3600);
+
     return {
       id: r.id,
       messageId: r.message_id,
       mimeType: r.mime_type,
       sizeBytes: Number(r.size_bytes),
       originalName: r.original_name,
-      url: `${env.PUBLIC_API_BASE_URL}/api/v1/attachments/${r.id}`,
+      url,
       metadata: (r.metadata as Record<string, unknown>) ?? null,
     };
   }

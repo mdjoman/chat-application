@@ -1,3 +1,4 @@
+
 export type CallType = 'audio' | 'video';
 
 export type CallStatus =
@@ -42,6 +43,8 @@ export type PresenceStatus =
   | 'calling'
   | 'in_call';
 
+// ---- API Errors ----
+
 export interface ApiError {
   code: string;
   message: string;
@@ -51,7 +54,9 @@ export interface ApiError {
 export interface ApiErrorResponse {
   error: ApiError;
 }
+
 // ---- Messages ----
+
 export interface MessageDTO {
   id: number;
   uuid: string;
@@ -86,7 +91,8 @@ export interface AttachmentDTO {
   metadata: Record<string, unknown> | null;
 }
 
-// ---- Socket payloads ----
+// ---- Socket Payloads ----
+
 export interface SendMessagePayload {
   conversationId: number;
   type?: MessageType;
@@ -107,4 +113,45 @@ export interface ReadPayload {
 export interface ReactionPayload {
   messageId: number;
   reaction: string;
+}
+
+// ---- Calls ----
+
+export type CallParticipantStatus =
+  | 'invited'
+  | 'ringing'
+  | 'accepted'
+  | 'connected'
+  | 'rejected'
+  | 'missed'
+  | 'left'
+  | 'cancelled'
+  | 'failed';
+
+export interface CallDTO {
+  id: number;
+  callUuid: string;
+  conversationId: number;
+  initiatedBy: number;
+  callType: CallType;
+  status: CallStatus;
+  startedAt: string;
+  connectedAt: string | null;
+  endedAt: string | null;
+  durationSeconds: number | null;
+  endReason: CallEndReason | null;
+  participants: CallParticipantDTO[];
+}
+
+export interface CallParticipantDTO {
+  userId: number;
+  role: 'caller' | 'callee';
+  status: CallParticipantStatus;
+  invitedAt: string;
+  joinedAt: string | null;
+  leftAt: string | null;
+  durationSeconds: number | null;
+  micMuted: boolean;
+  cameraEnabled: boolean;
+  screenSharing: boolean;
 }

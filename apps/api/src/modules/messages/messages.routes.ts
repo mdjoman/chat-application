@@ -99,9 +99,12 @@ const messagesRoutes: FastifyPluginAsync = async (fastify) => {
         messageId: id,
         conversationId,
       });
-    } catch { /* noop */ }
-    return reply.status(204).send();
-  });
+      } catch { /* noop */ }
+        return reply.status(204).send();
+      },
+    );
+
+  // --- Pin / unpin ---
 
   fastify.post('/messages/:id/reactions', { preHandler: auth }, async (req, reply) => {
     const { userId, tenantId } = req.auth!;

@@ -182,7 +182,7 @@ a { color: inherit; }
 
 /* Messages */
 .cw-msg {
-  max-width: 82%;
+  max-width: 100%;
   padding: 8px 12px;
   border-radius: var(--cw-radius-sm);
   word-wrap: break-word; white-space: pre-wrap;
@@ -278,7 +278,7 @@ a { color: inherit; }
 }
 
 /* Attachments */
-.cw-attach { margin: 4px 0; }
+.cw-attach { margin: 4px 0; width: 300px;}
 .cw-attach img, .cw-attach video {
   max-width: 100%; max-height: 320px; border-radius: 10px; display: block;
 }
@@ -559,5 +559,19 @@ a { color: inherit; }
   display: flex; align-items: center; justify-content: center;
   font-size: 14px; border: 2px solid var(--cw-bg);
 }
+  /* ---------- Call overlay additions ---------- */
+.cw-call__quality {
+  margin-top: 8px;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px;
+  background: rgba(255,255,255,.12);
+  padding: 3px 10px; border-radius: 12px;
+}
+.cw-call__dot { width: 8px; height: 8px; border-radius: 50%; }
+.cw-call__quality--excellent .cw-call__dot { background: #22C55E; }
+.cw-call__quality--good      .cw-call__dot { background: #F59E0B; }
+.cw-call__quality--poor      .cw-call__dot { background: #EF4444; }
+.cw-ctrl--accept { background: #22C55E; }
+.cw-ctrl--accept:hover { background: #16A34A; }
 `;
 }

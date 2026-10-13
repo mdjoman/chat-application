@@ -1,3 +1,4 @@
+
 export interface SocketContext {
   userId: number;
   tenantId: number;

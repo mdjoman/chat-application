@@ -19,7 +19,15 @@ export function MessageBubble(props: {
   sender: ConversationMember | undefined;
   isGroup: boolean;
   canModerate: boolean;
-  features: { reply: boolean; edit: boolean; delete: boolean; reaction: boolean; forward: boolean; pin: boolean };
+  readByOthers: boolean;
+  features: {
+    reply: boolean;
+    edit: boolean;
+    delete: boolean;
+    reaction: boolean;
+    forward: boolean;
+    pin: boolean;
+  };
   onReply: (m: Message) => void;
   onDelete: (m: Message) => void;
   onEdit: (m: Message) => void;
@@ -31,15 +39,24 @@ export function MessageBubble(props: {
   const [lightbox, setLightbox] = useState<LightboxMedia | null>(null);
 
   const { msg, isMine } = props;
-  const mineReactions = new Set((msg.reactions ?? []).filter((r) => r.userId === props.meId).map((r) => r.reaction));
+  const mineReactions = new Set(
+    (msg.reactions ?? []).filter((r) => r.userId === props.meId).map((r) => r.reaction),
+  );
   const counts = new Map<string, number>();
-  for (const r of msg.reactions ?? []) counts.set(r.reaction, (counts.get(r.reaction) ?? 0) + 1);
+  for (const r of msg.reactions ?? []) {
+    counts.set(r.reaction, (counts.get(r.reaction) ?? 0) + 1);
+  }
 
   const isDeleted = Boolean(msg.deletedAt);
   const attachments = (msg.attachments ?? []) as unknown as Attachment[];
 
   const senderName = props.sender?.displayName ?? `User #${msg.senderId ?? '?'}`;
-  const initials = senderName.split(/\s+/).map((s) => s[0] || '').join('').slice(0, 2).toUpperCase();
+  const initials = senderName
+    .split(/\s+/)
+    .map((s) => s[0] || '')
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
 
   return (
     <div class={`cw-msgRow ${isMine ? 'cw-msgRow--me' : 'cw-msgRow--them'}`}>
@@ -53,29 +70,44 @@ export function MessageBubble(props: {
         </div>
       )}
 
-      <div class={`cw-msg ${isMine ? 'cw-msg--me' : 'cw-msg--them'} ${isDeleted ? 'cw-msg--deleted' : ''}`}>
-        {!isMine && props.isGroup && (
-          <div class="cw-msg__sender">{senderName}</div>
-        )}
+      <div
+        class={`cw-msg ${isMine ? 'cw-msg--me' : 'cw-msg--them'} ${
+          isDeleted ? 'cw-msg--deleted' : ''
+        }`}
+      >
+        {!isMine && props.isGroup && <div class="cw-msg__sender">{senderName}</div>}
 
         {msg.replyToId && <div class="cw-msg__reply">Reply to #{msg.replyToId}</div>}
-
         {msg.pinnedAt && <div class="cw-msg__pinned">📌 Pinned</div>}
         {msg.forwardedFromId && <div class="cw-msg__forwarded">↗ Forwarded</div>}
 
-        {!isDeleted && attachments.map((a) => (
-          <AttachmentView
-            key={a.id}
-            attachment={a}
-            onOpen={(media) => setLightbox(media)}
-          />
-        ))}
+        {!isDeleted &&
+          attachments.map((a) => (
+            <AttachmentView
+              key={a.id}
+              attachment={a}
+              onOpen={(media) => setLightbox(media)}
+            />
+          ))}
+
         {!isDeleted && msg.content && <div class="cw-msg__text">{msg.content}</div>}
         {isDeleted && <div class="cw-msg__text">This message was deleted</div>}
 
         <div class="cw-msg__meta">
           {formatLocalTime(msg.createdAt)}
           {msg.editedAt ? ' · edited' : ''}
+          {isMine && !isDeleted && (
+            <span
+              class="cw-msg__status"
+              style={{
+                marginLeft: 6,
+                color: props.readByOthers ? '#3B82F6' : undefined,
+              }}
+              title={props.readByOthers ? 'Read' : 'Sent'}
+            >
+              {props.readByOthers ? '✓✓' : '✓'}
+            </span>
+          )}
         </div>
 
         {!isDeleted && counts.size > 0 && (
@@ -95,12 +127,14 @@ export function MessageBubble(props: {
           </div>
         )}
 
-        {/* 3-dot menu trigger (always visible) */}
         {!isDeleted && (
           <button
             type="button"
             class="cw-msg__more"
-            onClick={() => setMenuOpen((v) => !v)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen((v) => !v);
+            }}
             aria-label="Message options"
             title="Message options"
           >
@@ -114,13 +148,14 @@ export function MessageBubble(props: {
             isMine={isMine}
             isGroup={props.isGroup}
             canModerate={props.canModerate}
-            canPin={true}
             features={props.features}
             onClose={() => setMenuOpen(false)}
             onReply={() => props.onReply(msg)}
             onEdit={() => props.onEdit(msg)}
             onDelete={() => props.onDelete(msg)}
-            onReact={(reaction) => props.onReact(msg, reaction, !mineReactions.has(reaction))}
+            onReact={(reaction) =>
+              props.onReact(msg, reaction, !mineReactions.has(reaction))
+            }
             onCopy={() => {
               const text = msg.content ?? '';
               if (text) void navigator.clipboard.writeText(text);
@@ -151,7 +186,9 @@ function AttachmentView({
         <button
           type="button"
           class="cw-attach__open"
-          onClick={() => onOpen({ kind: 'image', url: attachment.url, name: attachment.originalName })}
+          onClick={() =>
+            onOpen({ kind: 'image', url: attachment.url, name: attachment.originalName })
+          }
         >
           <img src={attachment.url} alt={attachment.originalName ?? 'image'} loading="lazy" />
         </button>
@@ -165,7 +202,9 @@ function AttachmentView({
         <button
           type="button"
           class="cw-attach__open"
-          onClick={() => onOpen({ kind: 'video', url: attachment.url, name: attachment.originalName })}
+          onClick={() =>
+            onOpen({ kind: 'video', url: attachment.url, name: attachment.originalName })
+          }
         >
           <video src={attachment.url} preload="metadata" />
           <span class="cw-attach__play">▶</span>
@@ -183,7 +222,13 @@ function AttachmentView({
   }
 
   return (
-    <a class="cw-attach cw-attach--file" href={attachment.url} target="_blank" rel="noreferrer" download>
+    <a
+      class="cw-attach cw-attach--file"
+      href={attachment.url}
+      target="_blank"
+      rel="noreferrer"
+      download
+    >
       <span>📄</span>
       <span class="cw-attach__name">{attachment.originalName ?? 'file'}</span>
       <span class="cw-attach__size">{humanSize(attachment.sizeBytes)}</span>

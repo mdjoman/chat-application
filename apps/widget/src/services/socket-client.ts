@@ -12,11 +12,22 @@ export class SocketClient {
     this.baseUrl = baseUrl.replace(/\/api\/v1\/?$/, '');
   }
 
-  get socket(): Socket | null { return this._socket; }
+  get socket(): Socket | null {
+    return this._socket;
+  }
 
+  // ---------------------------------------------------------------
+  // Connect / disconnect
+  // ---------------------------------------------------------------
   connect(): void {
     const token = store.get().accessToken;
     if (!token) throw new Error('No access token');
+
+    if (this._socket) {
+      this._socket.removeAllListeners();
+      this._socket.disconnect();
+      this._socket = null;
+    }
 
     this._socket = io(this.baseUrl, {
       path: '/socket.io',
@@ -31,7 +42,10 @@ export class SocketClient {
 
     this._socket.on('connect', () => {
       const convs = store.get().conversations;
-      for (const c of convs) this._socket!.emit('conversation:join', { conversationId: c.id });
+      for (const c of convs) {
+        this._socket!.emit('conversation:join', { conversationId: c.id });
+      }
+      void this.refreshConversations();
     });
 
     this._socket.on('connect_error', async (err) => {
@@ -48,22 +62,31 @@ export class SocketClient {
   }
 
   disconnect(): void {
-    this._socket?.disconnect();
-    this._socket = null;
+    if (this._socket) {
+      this._socket.removeAllListeners();
+      this._socket.disconnect();
+      this._socket = null;
+    }
   }
 
+  // ---------------------------------------------------------------
+  // Public helpers
+  // ---------------------------------------------------------------
   joinConversation(conversationId: number): void {
     this._socket?.emit('conversation:join', { conversationId });
   }
 
-  sendMessage(input: {
-    conversationId: number;
-    content: string;
-    type?: Message['type'];
-    replyToId?: number | null;
-    clientId?: string;
-    attachmentIds?: number[];
-  }, ack?: (res: { ok?: boolean; message?: Message; error?: string }) => void): void {
+  sendMessage(
+    input: {
+      conversationId: number;
+      content: string;
+      type?: Message['type'];
+      replyToId?: number | null;
+      clientId?: string;
+      attachmentIds?: number[];
+    },
+    ack?: (res: { ok?: boolean; message?: Message; error?: string }) => void,
+  ): void {
     this._socket?.emit('message:send', input, ack);
   }
 
@@ -91,16 +114,52 @@ export class SocketClient {
     this._socket?.emit('message:react', { messageId, reaction, added });
   }
 
+  async refreshConversations(): Promise<void> {
+    try {
+      const { ApiClient } = await import('./api-client');
+      const baseApi = `${this.baseUrl.replace(/\/$/, '')}/api/v1`;
+      const api = new ApiClient(baseApi);
+      const list = await api.listConversations();
+      store.set({ conversations: list });
+      for (const c of list) {
+        this._socket?.emit('conversation:join', { conversationId: c.id });
+      }
+    } catch { /* silent */ }
+  }
+
+  // ---- Call helpers ----
+  acceptCall(callId: number): void {
+    this._socket?.emit('call:accept', { callId });
+  }
+  rejectCall(callId: number, reason: 'rejected' | 'busy' = 'rejected'): void {
+    this._socket?.emit('call:reject', { callId, reason });
+  }
+  cancelCall(callId: number): void {
+    this._socket?.emit('call:cancel', { callId });
+  }
+  endCall(
+    callId: number,
+    reason: 'completed' | 'remote_ended' | 'network_error' = 'completed',
+  ): void {
+    this._socket?.emit('call:end', { callId, reason });
+  }
+
+  // ---------------------------------------------------------------
+  // Private
+  // ---------------------------------------------------------------
   private bindEvents(): void {
     if (!this._socket) return;
 
+    // --- Messages ---
     this._socket.on('message:new', (msg: Message) => {
       store.addMessage(msg);
+
       const me = store.get().me;
       const conv = store.get().conversations.find((c) => c.id === msg.conversationId);
 
-      // Update the conversation's lastMessage preview
-      if (conv) {
+      if (!conv) {
+        void this.refreshConversations();
+      } else {
         store.upsertConversation({
           ...conv,
           lastMessageAt: msg.createdAt,
@@ -144,16 +203,24 @@ export class SocketClient {
       }
     });
 
-    this._socket.on('message:reaction', (payload: { messageId: number; userId: number; reaction: string; added: boolean }) => {
+    this._socket.on('message:reaction', (payload: {
+      messageId: number; userId: number; reaction: string; added: boolean;
+    }) => {
       const all = store.get().messagesByConversation;
       for (const convId of Object.keys(all)) {
         const list = all[Number(convId)] ?? [];
         const msg = list.find((m) => m.id === payload.messageId);
         if (!msg) continue;
         const reactions = [...(msg.reactions ?? [])];
-        const idx = reactions.findIndex((r) => r.userId === payload.userId && r.reaction === payload.reaction);
+        const idx = reactions.findIndex(
+          (r) => r.userId === payload.userId && r.reaction === payload.reaction,
+        );
         if (payload.added && idx === -1) {
-          reactions.push({ userId: payload.userId, reaction: payload.reaction, createdAt: new Date().toISOString() });
+          reactions.push({
+            userId: payload.userId,
+            reaction: payload.reaction,
+            createdAt: new Date().toISOString(),
+          });
         } else if (!payload.added && idx !== -1) {
           reactions.splice(idx, 1);
         }
@@ -162,24 +229,60 @@ export class SocketClient {
       }
     });
 
-    this._socket.on('typing:update', (payload: { conversationId: number; userId: number; isTyping: boolean }) => {
+    // --- Read receipts: another user read MY messages ---
+    this._socket.on('message:read', (payload: {
+      conversationId: number;
+      userId: number;
+      messageIds: number[];
+    }) => {
+      const me = store.get().me;
+      if (!me) return;
+      // Only track reads from OTHER users (my sent messages being read)
+      if (payload.userId !== me.id) {
+        store.markMessagesRead(payload.messageIds);
+      }
+    });
+
+    this._socket.on('typing:update', (payload: {
+      conversationId: number; userId: number; isTyping: boolean;
+    }) => {
       store.setTyping(payload.conversationId, payload.userId, payload.isTyping);
     });
 
-    this._socket.on('presence:update', (payload: { userId: number; status: string; lastSeenAt: string }) => {
+    // --- Presence: handle BOTH event shapes ---
+    this._socket.on('presence:update', (payload: {
+      userId: number; status: string; lastSeenAt: string;
+    }) => {
       const online = payload.status === 'online' || payload.status === 'away';
       store.setOnline(payload.userId, online);
       bus.emit(online ? 'userOnline' : 'userOffline', payload);
     });
 
-    // New conversation created (e.g. someone started a direct chat with me)
-    this._socket.on('conversation:created', (conv: Conversation) => {
-      store.upsertConversation(conv);
+    this._socket.on('presence:online', (payload: {
+      userId: number; online: boolean; lastSeen: string | null;
+    }) => {
+      store.setOnline(payload.userId, true);
+      bus.emit('userOnline', payload);
+    });
+
+    this._socket.on('presence:offline', (payload: {
+      userId: number; online: boolean; lastSeen: string | null;
+    }) => {
+      store.setOnline(payload.userId, false);
+      bus.emit('userOffline', payload);
+    });
+
+    // --- Conversations ---
+    this._socket.on('conversation:created', async (conv: Conversation) => {
+      try {
+        await this.refreshConversations();
+      } catch {
+        store.upsertConversation(conv);
+      }
       this._socket!.emit('conversation:join', { conversationId: conv.id });
       bus.emit('ready', { conversation: conv });
     });
 
-    // Removed from a group (or I left)
     this._socket.on('conversation:removed', (payload: { conversationId: number }) => {
       store.set((s) => ({
         conversations: s.conversations.filter((c) => c.id !== payload.conversationId),
@@ -188,6 +291,7 @@ export class SocketClient {
       }));
     });
 
+    // --- Errors ---
     this._socket.on('error', (err: { code: string; message: string }) => {
       bus.emit('error', err);
     });

@@ -1,0 +1,45 @@
+﻿=== Environment ===
+Date:       2026-10-12 15:15:00
+Node:       v24.18.0
+pnpm:       NOT FOUND
+npm:        NOT FOUND
+OS:         Microsoft Windows 11 Pro 10.0.26200
+Hostname:   DESKTOP-IUR2AQF
+
+=== Project ===
+Root:       D:\laragon\www\chat-platform
+Widget dist exists: True
+API .env exists:    True
+
+=== Listening ports (3000 / 3306 / 6379) ===
+
+  TCP    0.0.0.0:3000           0.0.0.0:0              LISTENING
+  TCP    0.0.0.0:3306           0.0.0.0:0              LISTENING
+  TCP    0.0.0.0:33060          0.0.0.0:0              LISTENING
+  TCP    127.0.0.1:3000         127.0.0.1:57953        ESTABLISHED
+  TCP    127.0.0.1:3000         127.0.0.1:58622        ESTABLISHED
+  TCP    127.0.0.1:3306         127.0.0.1:49774        ESTABLISHED
+  TCP    127.0.0.1:3306         127.0.0.1:49775        ESTABLISHED
+  TCP    127.0.0.1:6379         0.0.0.0:0              LISTENING
+  TCP    127.0.0.1:6379         127.0.0.1:51298        ESTABLISHED
+  TCP    127.0.0.1:6379         127.0.0.1:51299        ESTABLISHED
+  TCP    127.0.0.1:6379         127.0.0.1:51300        ESTABLISHED
+  TCP    127.0.0.1:49774        127.0.0.1:3306         ESTABLISHED
+  TCP    127.0.0.1:49775        127.0.0.1:3306         ESTABLISHED
+  TCP    127.0.0.1:51298        127.0.0.1:6379         ESTABLISHED
+  TCP    127.0.0.1:51299        127.0.0.1:6379         ESTABLISHED
+  TCP    127.0.0.1:51300        127.0.0.1:6379         ESTABLISHED
+  TCP    127.0.0.1:57953        127.0.0.1:3000         ESTABLISHED
+  TCP    127.0.0.1:58622        127.0.0.1:3000         ESTABLISHED
+  TCP    [::]:3306              [::]:0                 LISTENING
+  TCP    [::]:33060             [::]:0                 LISTENING
+
+=== Package versions (relevant) ===
+api fastify:        ^4.26.2
+api socket.io:      ^4.7.5
+api knex:           ^3.1.0
+api ioredis:        ^5.3.2
+widget preact:      ^10.20.2
+widget socket.io-client: ^4.7.5
+
+

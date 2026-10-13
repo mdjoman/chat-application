@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Message } from '../types';
-import { IconEdit, IconReply, IconTrash, IconCheck, IconUsers } from './Icons';
+import { IconEdit, IconReply, IconTrash, IconCheck } from './Icons';
 
 const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
@@ -9,8 +9,14 @@ export function MessageMenu(props: {
   isMine: boolean;
   isGroup: boolean;
   canModerate: boolean;
-  canPin: boolean;
-  features: { reply: boolean; edit: boolean; delete: boolean; reaction: boolean; forward: boolean; pin: boolean };
+  features: {
+    reply: boolean;
+    edit: boolean;
+    delete: boolean;
+    reaction: boolean;
+    forward: boolean;
+    pin: boolean;
+  };
   onClose: () => void;
   onReply: () => void;
   onEdit: () => void;
@@ -23,18 +29,108 @@ export function MessageMenu(props: {
   const [showReactions, setShowReactions] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
 
+  // সর্বশেষ handler গুলো ref-এ রাখি, যাতে native listener সবসময়
+  // freshest props দেখে (stale closure সমস্যা এড়াতে)
+  const actionsRef = useRef({
+    onClose: props.onClose,
+    onReply: props.onReply,
+    onEdit: props.onEdit,
+    onDelete: props.onDelete,
+    onReact: props.onReact,
+    onCopy: props.onCopy,
+    onForward: props.onForward,
+    onPin: props.onPin,
+  });
+
   useEffect(() => {
-    const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) props.onClose();
+    actionsRef.current = {
+      onClose: props.onClose,
+      onReply: props.onReply,
+      onEdit: props.onEdit,
+      onDelete: props.onDelete,
+      onReact: props.onReact,
+      onCopy: props.onCopy,
+      onForward: props.onForward,
+      onPin: props.onPin,
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') props.onClose(); };
-    document.addEventListener('mousedown', onClick);
-    document.addEventListener('keydown', onKey);
+  });
+
+  // ---- Native event listener যোগ করি — Shadow DOM-এও কাজ করবে ----
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+
+    const handleClick = (e: MouseEvent) => {
+      const target = (e.target as HTMLElement).closest('[data-action]') as HTMLElement | null;
+      if (!target) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const action = target.dataset.action;
+      const a = actionsRef.current;
+
+      console.log('[MessageMenu] action fired:', action);
+
+      switch (action) {
+        case 'toggle-reactions':
+          setShowReactions(true);
+          return;
+        case 'react': {
+          const reaction = target.dataset.reaction ?? '';
+          if (reaction) a.onReact(reaction);
+          a.onClose();
+          return;
+        }
+        case 'reply':
+          a.onReply();
+          a.onClose();
+          return;
+        case 'edit':
+          a.onEdit();
+          a.onClose();
+          return;
+        case 'copy':
+          a.onCopy();
+          a.onClose();
+          return;
+        case 'forward':
+          a.onForward();
+          a.onClose();
+          return;
+        case 'pin':
+          a.onPin();
+          a.onClose();
+          return;
+        case 'delete':
+          a.onDelete();
+          a.onClose();
+          return;
+        default:
+          return;
+      }
+    };
+
+    const handleOutside = (e: MouseEvent) => {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) {
+        actionsRef.current.onClose();
+      }
+    };
+
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') actionsRef.current.onClose();
+    };
+
+    root.addEventListener('click', handleClick, true);
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleKey);
+
     return () => {
-      document.removeEventListener('mousedown', onClick);
-      document.removeEventListener('keydown', onKey);
+      root.removeEventListener('click', handleClick, true);
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleKey);
     };
-  }, [props]);
+  }, []);
 
   const isDeleted = Boolean(props.msg.deletedAt);
 
@@ -46,7 +142,7 @@ export function MessageMenu(props: {
             <button
               type="button"
               class="cw-menu__item cw-menu__item--react"
-              onClick={() => setShowReactions(true)}
+              data-action="toggle-reactions"
             >
               🙂 React…
             </button>
@@ -57,7 +153,8 @@ export function MessageMenu(props: {
                   key={r}
                   type="button"
                   class="cw-menu__reactionBtn"
-                  onClick={() => { props.onReact(r); props.onClose(); }}
+                  data-action="react"
+                  data-reaction={r}
                 >
                   {r}
                 </button>
@@ -68,44 +165,45 @@ export function MessageMenu(props: {
       )}
 
       {props.features.reply && !isDeleted && (
-        <button type="button" class="cw-menu__item" onClick={() => { props.onReply(); props.onClose(); }}>
+        <button type="button" class="cw-menu__item" data-action="reply">
           <IconReply width={14} height={14} /> Reply
         </button>
       )}
 
       {props.isMine && props.features.edit && props.msg.type === 'text' && !isDeleted && (
-        <button type="button" class="cw-menu__item" onClick={() => { props.onEdit(); props.onClose(); }}>
+        <button type="button" class="cw-menu__item" data-action="edit">
           <IconEdit width={14} height={14} /> Edit
         </button>
       )}
 
-      <button type="button" class="cw-menu__item" onClick={() => { props.onCopy(); props.onClose(); }}>
+      <button type="button" class="cw-menu__item" data-action="copy">
         📋 Copy text
       </button>
 
       {props.features.forward && !isDeleted && (
-        <button type="button" class="cw-menu__item" onClick={() => { props.onForward(); props.onClose(); }}>
+        <button type="button" class="cw-menu__item" data-action="forward">
           ↗ Forward
         </button>
       )}
 
       {props.features.pin && !isDeleted && (
-        <button type="button" class="cw-menu__item" onClick={() => { props.onPin(); props.onClose(); }}>
-          <IconUsers width={14} height={14} />
-          {props.msg.pinnedAt ? 'Unpin' : 'Pin'}
+        <button type="button" class="cw-menu__item" data-action="pin">
+          {props.msg.pinnedAt ? '📌 Unpin' : '📌 Pin'}
           {props.msg.pinnedAt && <IconCheck width={12} height={12} />}
         </button>
       )}
 
-      {(props.isMine || (props.isGroup && props.canModerate)) && props.features.delete && !isDeleted && (
-        <button
-          type="button"
-          class="cw-menu__item cw-menu__item--danger"
-          onClick={() => { props.onDelete(); props.onClose(); }}
-        >
-          <IconTrash width={14} height={14} /> Delete
-        </button>
-      )}
+      {(props.isMine || (props.isGroup && props.canModerate)) &&
+        props.features.delete &&
+        !isDeleted && (
+          <button
+            type="button"
+            class="cw-menu__item cw-menu__item--danger"
+            data-action="delete"
+          >
+            <IconTrash width={14} height={14} /> Delete
+          </button>
+        )}
     </div>
   );
 }

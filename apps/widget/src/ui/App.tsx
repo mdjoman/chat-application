@@ -6,17 +6,21 @@ import { LoginScreen } from './LoginScreen';
 import { NewConversation } from './NewConversation';
 import { ConversationInfo } from './ConversationInfo';
 import { ProfileScreen } from './ProfileScreen';
-import { IconClose, IconMinimize, IconUsers } from './Icons';
+import { CallOverlay } from './CallOverlay';
+import { CallHistory } from './CallHistory';
+import { IconClose, IconMinimize, IconUsers, IconPhone } from './Icons';
 import { store } from '../state/store';
 import type { Conversation, Message } from '../types';
 import type { ApiClient } from '../services/api-client';
 import type { SocketClient } from '../services/socket-client';
+import type { CallController } from '../services/call-controller';
 
-type View = 'list' | 'chat' | 'new' | 'info' | 'profile';
+type View = 'list' | 'chat' | 'new' | 'info' | 'profile' | 'calls';
 
 export function App(props: {
   api: ApiClient;
   socket: SocketClient;
+  call: CallController;
   tenantSlug: string;
   onAuthed: () => Promise<void>;
   onLogout: () => void;
@@ -27,13 +31,47 @@ export function App(props: {
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
 
+  // Call UI state (mirrors CallController)
+  const [callState, setCallState] = useState(props.call.getState());
+
+  // Re-render on any store change.
   useEffect(() => store.subscribe(() => setTick((t) => t + 1)), []);
+  // Re-render on any call state change.
+  useEffect(() => props.call.subscribe(setCallState), [props.call]);
+
+  // On mount + on window focus: refresh conversations so newly added
+  // groups appear even if the tab was backgrounded when the socket event
+  // was broadcast.
+  useEffect(() => {
+    const onFocus = () => {
+      if (store.get().authStatus === 'authenticated') {
+        void props.socket.refreshConversations();
+      }
+    };
+    // Also refresh immediately after the app mounts.
+    if (store.get().authStatus === 'authenticated') {
+      void props.socket.refreshConversations();
+    }
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [props.socket]);
 
   const s = store.get();
   const meId = s.me?.id ?? 0;
 
   const features = useMemo(
-    () => ({ reaction: true, reply: true, delete: true, edit: true, forward: true, pin: true }),
+    () => ({
+      reaction: true,
+      reply: true,
+      delete: true,
+      edit: true,
+      forward: true,
+      pin: true,
+    }),
     [],
   );
 
@@ -41,31 +79,59 @@ export function App(props: {
     ? s.conversations.find((c) => c.id === s.activeConversationId) ?? null
     : null;
 
-  const activeMessages = activeConv ? s.messagesByConversation[activeConv.id] ?? [] : [];
+  const activeMessages = activeConv
+    ? s.messagesByConversation[activeConv.id] ?? []
+    : [];
+
   const typingIds = activeConv
     ? [...(s.typingByConversation[activeConv.id] ?? new Set<number>())]
     : [];
 
   useEffect(() => {
-    if (activeConv && view !== 'info' && view !== 'profile') setView('chat');
-    else if (!activeConv && view !== 'new' && view !== 'profile') setView('list');
-  }, [activeConv?.id]);
+    if (callState.call) return;
+    if (activeConv && view !== 'info' && view !== 'profile' && view !== 'calls') {
+      setView('chat');
+    } else if (
+      !activeConv &&
+      view !== 'new' &&
+      view !== 'profile' &&
+      view !== 'calls'
+    ) {
+      setView('list');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeConv?.id, callState.call]);
 
-  /** Always fetch the latest history — guarantees messages show after reload. */
+  // ---------------------------------------------------------------
+  // History
+  // ---------------------------------------------------------------
+
   async function fetchLatestHistory(conversationId: number): Promise<void> {
     store.set((prev) => ({
-      historyLoadingByConversation: { ...prev.historyLoadingByConversation, [conversationId]: true },
+      historyLoadingByConversation: {
+        ...prev.historyLoadingByConversation,
+        [conversationId]: true,
+      },
     }));
     try {
       const page = await props.api.history(conversationId, 40, null);
       store.setMessages(conversationId, page.items);
       store.set((prev) => ({
-        historyCursorByConversation: { ...prev.historyCursorByConversation, [conversationId]: page.nextCursor },
-        historyHasMoreByConversation: { ...prev.historyHasMoreByConversation, [conversationId]: page.hasMore },
+        historyCursorByConversation: {
+          ...prev.historyCursorByConversation,
+          [conversationId]: page.nextCursor,
+        },
+        historyHasMoreByConversation: {
+          ...prev.historyHasMoreByConversation,
+          [conversationId]: page.hasMore,
+        },
       }));
     } finally {
       store.set((prev) => ({
-        historyLoadingByConversation: { ...prev.historyLoadingByConversation, [conversationId]: false },
+        historyLoadingByConversation: {
+          ...prev.historyLoadingByConversation,
+          [conversationId]: false,
+        },
       }));
     }
   }
@@ -75,7 +141,6 @@ export function App(props: {
     store.clearUnread(id);
     props.socket.joinConversation(id);
     setView('chat');
-
     await fetchLatestHistory(id);
 
     const msgs = store.get().messagesByConversation[id] ?? [];
@@ -91,10 +156,20 @@ export function App(props: {
     const page = await props.api.history(activeConv.id, 40, cursor);
     store.prependMessages(activeConv.id, page.items);
     store.set((prev) => ({
-      historyCursorByConversation: { ...prev.historyCursorByConversation, [activeConv.id]: page.nextCursor },
-      historyHasMoreByConversation: { ...prev.historyHasMoreByConversation, [activeConv.id]: page.hasMore },
+      historyCursorByConversation: {
+        ...prev.historyCursorByConversation,
+        [activeConv.id]: page.nextCursor,
+      },
+      historyHasMoreByConversation: {
+        ...prev.historyHasMoreByConversation,
+        [activeConv.id]: page.hasMore,
+      },
     }));
   }
+
+  // ---------------------------------------------------------------
+  // Actions
+  // ---------------------------------------------------------------
 
   function sendMessage(text: string, attachmentIds: number[], type?: Message['type']) {
     if (!activeConv) return;
@@ -109,7 +184,9 @@ export function App(props: {
         attachmentIds,
       },
       (res) => {
-        if (!res?.ok && res?.error) store.set({ error: `Send failed: ${res.error}` });
+        if (!res?.ok && res?.error) {
+          store.set({ error: `Send failed: ${res.error}` });
+        }
         setReplyTo(null);
       },
     );
@@ -131,12 +208,15 @@ export function App(props: {
   }
 
   async function handleForward(m: Message) {
-    // Simple forward: prompt for a target conversation id (in production this
-    // would be a picker; the API supports multiple target ids).
     const list = s.conversations.filter((c) => c.id !== m.conversationId);
-    if (list.length === 0) { store.set({ error: 'No other conversations to forward to' }); return; }
+    if (list.length === 0) {
+      store.set({ error: 'No other conversations to forward to' });
+      return;
+    }
     const choice = prompt(
-      `Forward to:\n${list.map((c) => `${c.id} = ${c.name ?? 'Direct #' + c.id}`).join('\n')}\n\nEnter conversation id:`,
+      `Forward to:\n${list
+        .map((c) => `${c.id} = ${c.name ?? 'Direct #' + c.id}`)
+        .join('\n')}\n\nEnter conversation id:`,
     );
     const target = Number(choice);
     if (!Number.isFinite(target) || target <= 0) return;
@@ -155,26 +235,71 @@ export function App(props: {
     }
   }
 
-  function startAudioCall() {
+  async function startAudioCall() {
     if (!activeConv) return;
-    store.set({ error: 'Audio calling arrives in Phase 7' });
+    if (callState.call) {
+      store.set({ error: 'Already in a call' });
+      return;
+    }
+    try {
+      await props.call.startOutgoing(activeConv.id, 'audio');
+    } catch (err) {
+      store.set({ error: err instanceof Error ? err.message : String(err) });
+    }
   }
-  function startVideoCall() {
+
+  async function startVideoCall() {
     if (!activeConv) return;
-    store.set({ error: 'Video calling arrives in Phase 8' });
+    if (callState.call) {
+      store.set({ error: 'Already in a call' });
+      return;
+    }
+    try {
+      await props.call.startOutgoing(activeConv.id, 'video');
+    } catch (err) {
+      store.set({ error: err instanceof Error ? err.message : String(err) });
+    }
   }
+
+  // ---------------------------------------------------------------
+  // Derived
+  // ---------------------------------------------------------------
 
   const isAuthed = s.authStatus === 'authenticated';
   const needsAuth = s.authStatus === 'needs-auth';
-  const totalUnread = Object.values(s.unreadByConversation).reduce((a, b) => a + b, 0);
+  const totalUnread = Object.values(s.unreadByConversation).reduce(
+    (a, b) => a + b,
+    0,
+  );
+
+  const callPeerLabel = (() => {
+    const c = callState.call;
+    if (!c) return 'Call';
+    const other = c.participants.find((p) => p.userId !== meId);
+    const conv = s.conversations.find((cc) => cc.id === c.conversationId);
+    const otherMember = conv?.members.find((m) => m.userId === other?.userId);
+    return otherMember?.displayName ?? `User #${other?.userId ?? '?'}`;
+  })();
+
+  const firstRemoteStream = callState.remoteStreams.size
+    ? [...callState.remoteStreams.values()][0]!
+    : null;
+
+  // ---------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------
 
   return (
     <>
-      {!s.isOpen && (
-        <Launcher open={false} unread={totalUnread} onClick={() => store.set({ isOpen: true })} />
+      {!s.isOpen && !callState.call && (
+        <Launcher
+          open={false}
+          unread={totalUnread}
+          onClick={() => store.set({ isOpen: true })}
+        />
       )}
 
-      {s.isOpen && (
+      {s.isOpen && !callState.call && (
         <div class="cw-panel" role="dialog" aria-label="Chat widget">
           <header class="cw-header">
             <div>
@@ -189,27 +314,53 @@ export function App(props: {
             </div>
             <div class="cw-header__actions">
               {isAuthed && (
-                <button
-                  type="button"
-                  class="cw-icon-btn"
-                  aria-label="Profile"
-                  title="Profile"
-                  onClick={() => setView('profile')}
-                >
-                  <IconUsers />
-                </button>
+                <>
+                  <button
+                    type="button"
+                    class="cw-icon-btn"
+                    aria-label="Call history"
+                    title="Call history"
+                    onClick={() => setView('calls')}
+                  >
+                    <IconPhone />
+                  </button>
+                  <button
+                    type="button"
+                    class="cw-icon-btn"
+                    aria-label="Profile"
+                    title="Profile"
+                    onClick={() => setView('profile')}
+                  >
+                    <IconUsers />
+                  </button>
+                </>
               )}
-              <button type="button" class="cw-icon-btn" aria-label="Minimize" onClick={() => store.set({ isOpen: false })}>
+              <button
+                type="button"
+                class="cw-icon-btn"
+                aria-label="Minimize"
+                onClick={() => store.set({ isOpen: false })}
+              >
                 <IconMinimize />
               </button>
-              <button type="button" class="cw-icon-btn" aria-label="Close" onClick={() => store.set({ isOpen: false })}>
+              <button
+                type="button"
+                class="cw-icon-btn"
+                aria-label="Close"
+                onClick={() => store.set({ isOpen: false })}
+              >
                 <IconClose />
               </button>
             </div>
           </header>
 
           {s.error && (
-            <div class="cw-errorbar" onClick={() => store.set({ error: null })}>{s.error}</div>
+            <div
+              class="cw-errorbar"
+              onClick={() => store.set({ error: null })}
+            >
+              {s.error}
+            </div>
           )}
 
           {needsAuth && (
@@ -237,8 +388,8 @@ export function App(props: {
               api={props.api}
               onBack={() => setView('list')}
               onCreated={async (id) => {
-                const list = await props.api.listConversations();
-                store.set({ conversations: list });
+                // Refresh list, then open the created conversation.
+                await props.socket.refreshConversations();
                 await handleOpenConversation(id);
               }}
             />
@@ -256,7 +407,9 @@ export function App(props: {
               api={props.api}
               onBack={() => {
                 store.set({ activeConversationId: null });
-                setReplyTo(null); setEditing(null); setView('list');
+                setReplyTo(null);
+                setEditing(null);
+                setView('list');
               }}
               onShowInfo={() => setView('info')}
               onSend={sendMessage}
@@ -288,7 +441,11 @@ export function App(props: {
                 store.set({ activeConversationId: null });
                 setView('list');
               }}
-              onUpdated={(c) => store.upsertConversation(c)}
+              onUpdated={(c) => {
+                store.upsertConversation(c);
+                // Also refresh the full list to pick up any member changes.
+                void props.socket.refreshConversations();
+              }}
             />
           )}
 
@@ -300,10 +457,36 @@ export function App(props: {
             />
           )}
 
+          {isAuthed && view === 'calls' && (
+            <CallHistory api={props.api} onBack={() => setView('list')} />
+          )}
+
           {s.isLoading && !needsAuth && (
-            <div class="cw-empty"><div class="cw-spinner" /></div>
+            <div class="cw-empty">
+              <div class="cw-spinner" />
+            </div>
           )}
         </div>
+      )}
+
+      {callState.call && callState.status !== 'idle' && (
+        <CallOverlay
+          call={callState.call}
+          direction={callState.direction ?? 'outgoing'}
+          status={callState.status}
+          localStream={callState.localStream}
+          remoteStream={firstRemoteStream}
+          micMuted={callState.micMuted}
+          cameraOn={callState.cameraOn}
+          quality={callState.quality}
+          peerLabel={callPeerLabel}
+          onAccept={() => void props.call.accept()}
+          onReject={() => void props.call.reject()}
+          onHangUp={() => void props.call.hangUp()}
+          onToggleMic={() => props.call.toggleMic()}
+          onToggleCamera={() => void props.call.toggleCamera()}
+          onSwitchCamera={() => void props.call.switchCamera()}
+        />
       )}
     </>
   );

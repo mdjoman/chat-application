@@ -11,15 +11,27 @@ const turnRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get('/turn/credentials', { preHandler: auth }, async (req) => {
     const { userId } = req.auth!;
+
+    // No TURN configured — return STUN only.
+    if (!env.TURN_URL || !env.TURN_SECRET) {
+      return {
+        urls: [env.STUN_URL],
+        username: '',
+        credential: '',
+        ttl: 0,
+      };
+    }
+
     const ttl = env.TURN_TTL;
     const username = `${Math.floor(Date.now() / 1000) + ttl}:${userId}`;
     const hmac = crypto.createHmac('sha1', env.TURN_SECRET);
     hmac.update(username);
-    const password = hmac.digest('base64');
+    const credential = hmac.digest('base64');
+
     return {
       urls: [env.STUN_URL, env.TURN_URL],
       username,
-      credential: password,
+      credential,
       ttl,
     };
   });

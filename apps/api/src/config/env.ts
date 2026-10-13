@@ -50,15 +50,20 @@ const EnvSchema = z.object({
     'image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/mpeg,audio/ogg,audio/webm,audio/wav,application/pdf,text/plain,application/zip',
   ),
 
-  // TURN
-  TURN_URL: z.string().default('turn:localhost:3478'),
-  TURN_SECRET: z.string().min(16).default('change-me-turn-secret'),
-  TURN_TTL: z.coerce.number().int().positive().default(3600),
+
+  // TURN — optional. Empty TURN_URL means STUN-only mode.
+  TURN_URL: z.string().default(''),
+  TURN_SECRET: z.string().default(''),
+  TURN_TTL: z.coerce.number().int().nonnegative().default(0),
   STUN_URL: z.string().default('stun:stun.l.google.com:19302'),
 
   // Password reset
   PASSWORD_RESET_TTL: z.coerce.number().int().positive().default(1800),
   PASSWORD_RESET_URL: z.string().url().default('http://localhost:5173/reset-password'),
+
+  CALL_RING_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(45),
+  CALL_MAX_DURATION_SECONDS: z.coerce.number().int().positive().default(14400),
+  CALL_SIGNAL_TTL_SECONDS: z.coerce.number().int().positive().default(120),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

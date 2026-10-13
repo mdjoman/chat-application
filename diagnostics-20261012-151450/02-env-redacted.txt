@@ -1,0 +1,87 @@
+﻿# App
+NODE_ENV=development
+PORT=3000
+HOST=0.0.0.0
+LOG_LEVEL=info
+
+# URLs
+API_BASE_URL=http://localhost:3000
+CORS_ORIGINS=http://localhost:5173,http://localhost:3001,http://zms.test, http://modernbuilding.test
+
+# MySQL
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_USER=chat
+MYSQL_PASSWORD=REDACTED
+MYSQL_DATABASE=chat_platform
+MYSQL_POOL_MIN=2
+MYSQL_POOL_MAX=10
+
+# Redis
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+REDIS_PASSWORD=REDACTED
+REDIS_DB=0
+REDIS_KEY_PREFIX=REDACTED
+
+# JWT
+JWT_ACCESS_SECRET=REDACTED
+JWT_REFRESH_SECRET=REDACTED
+JWT_ACCESS_TTL=900          # 15 minutes
+JWT_REFRESH_TTL=2592000     # 30 days
+
+# Widget
+WIDGET_SHARED_SECRET=REDACTED
+
+# TURN
+TURN_URL=turn:turn.example.com:3478
+TURN_SECRET=REDACTED
+TURN_TTL=3600
+
+# Rate limiting
+RATE_LIMIT_MAX=100
+RATE_LIMIT_WINDOW_MS=60000
+
+ALLOW_REGISTRATION=true    # set false in production
+ARGON2_MEMORY_COST=65536
+ARGON2_TIME_COST=3
+ARGON2_PARALLELISM=1
+
+# Bootstrap (dev only) â€” used to seed the default tenant owner
+BOOTSTRAP_ADMIN_EMAIL=admin@local.test
+BOOTSTRAP_ADMIN_PASSWORD=REDACTED
+STORAGE_LOCAL_DIR=./storage
+MAX_UPLOAD_BYTES=26214400
+# File uploads
+UPLOAD_DIR=./storage/uploads
+UPLOAD_MAX_BYTES=26214400          # 25 MB
+UPLOAD_ALLOWED_MIME=image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/mpeg,audio/ogg,audio/webm,audio/wav,application/pdf,text/plain,application/zip
+
+# Public base URL for attachment links (must match your API origin)
+PUBLIC_API_BASE_URL=http://localhost:3000
+
+# TURN (Coturn) â€” ephemeral credentials are derived from this secret
+# TURN (ephemeral HMAC credentials)
+TURN_URL=turn:localhost:3478
+TURN_SECRET=REDACTED
+TURN_TTL=3600
+STUN_URL=stun:stun.l.google.com:19302
+# STUN_URL=stun:stun.l.google.com:19302
+# TURN_URL=turn:turn.yourdomain.com:3478?transport=udp
+# TURN_SECRET=your-32-char-secret-matching-coturn
+# TURN_TTL=3600
+WEBRTC_STUN_URLS=stun:stun.l.google.com:19302
+# for production, you should use your own STUN/TURN servers and set the following environment variables accordingly:
+# WEBRTC_STUN_URLS=stun:your-turn-domain.com:3478
+
+# WEBRTC_TURN_URLS=turn:your-turn-domain.com:3478?transport=udp,turn:your-turn-domain.com:3478?transport=tcp,turns:your-turn-domain.com:5349?transport=tcp
+
+# WEBRTC_TURN_USERNAME=your-turn-user
+# WEBRTC_TURN_CREDENTIAL=your-strong-turn-password
+# Password reset
+PASSWORD_RESET_TTL=REDACTED
+PASSWORD_RESET_URL=REDACTED
+# Where "forgot password" links point. The widget will append ?token=...
+CALL_RING_TIMEOUT_SECONDS=45
+CALL_MAX_DURATION_SECONDS=14400
+CALL_SIGNAL_TTL_SECONDS=120

@@ -15,6 +15,8 @@ export interface ChatWidgetFeatures {
   messagePin: boolean;
 }
 
+
+
 export interface ChatWidgetConfig {
   appId: string;
   userId: string;
@@ -22,6 +24,15 @@ export interface ChatWidgetConfig {
   apiBaseUrl: string;
   tenantSlug?: string;
   allowLogin?: boolean;
+  /**
+   * DANGER: Embedding credentials in client-side code exposes them to
+   * anyone who views the page. Use only on trusted/internal pages.
+   * For production, use the widget-token flow instead.
+   */
+  autoLogin?: {
+    username: string;
+    password: string;
+  };
   theme?: 'light' | 'dark' | 'auto';
   position?: 'bottom-right' | 'bottom-left';
   features?: Partial<ChatWidgetFeatures>;
@@ -120,3 +131,48 @@ export type WidgetEvent =
   | 'userOnline'
   | 'userOffline'
   | 'error';
+// ---- Calling ----
+export type CallType = 'audio' | 'video';
+
+export type CallStatus =
+  | 'initiated' | 'ringing' | 'accepted' | 'connecting' | 'connected'
+  | 'rejected' | 'missed' | 'cancelled' | 'failed' | 'ended';
+
+export type CallEndReason =
+  | 'completed' | 'rejected' | 'busy' | 'timeout' | 'network_error'
+  | 'user_cancelled' | 'remote_ended' | 'server_error';
+
+export interface CallParticipantDTO {
+  userId: number;
+  role: 'caller' | 'callee';
+  status: string;
+  invitedAt: string;
+  joinedAt: string | null;
+  leftAt: string | null;
+  durationSeconds: number | null;
+  micMuted: boolean;
+  cameraEnabled: boolean;
+  screenSharing: boolean;
+}
+
+export interface CallDTO {
+  id: number;
+  callUuid: string;
+  conversationId: number;
+  initiatedBy: number;
+  callType: CallType;
+  status: CallStatus;
+  startedAt: string;
+  connectedAt: string | null;
+  endedAt: string | null;
+  durationSeconds: number | null;
+  endReason: CallEndReason | null;
+  participants: CallParticipantDTO[];
+}
+
+export interface TurnCredentials {
+  urls: string[];
+  username: string;
+  credential: string;
+  ttl: number;
+}

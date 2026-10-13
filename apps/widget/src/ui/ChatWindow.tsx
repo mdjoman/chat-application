@@ -5,6 +5,7 @@ import { MessageInput } from './MessageInput';
 import { TypingIndicator } from './TypingIndicator';
 import { IconBack, IconPhone, IconVideo, IconInfo, IconSearch } from './Icons';
 import type { ApiClient } from '../services/api-client';
+import { store } from '../state/store';
 
 export function ChatWindow(props: {
   conversation: Conversation;
@@ -63,6 +64,7 @@ export function ChatWindow(props: {
 
   const canModerate = props.conversation.myRole === 'owner' || props.conversation.myRole === 'admin';
   const memberById = new Map(props.conversation.members.map((m) => [m.userId, m]));
+  const readSet = store.get().readMessageIds;
 
   return (
     <div class="cw-chat">
@@ -103,6 +105,7 @@ export function ChatWindow(props: {
             sender={m.senderId != null ? memberById.get(m.senderId) : undefined}
             isGroup={isGroup}
             canModerate={canModerate}
+            readByOthers={readSet.has(m.id)}
             features={props.features}
             onReply={props.onReply}
             onDelete={props.onDelete}
@@ -172,5 +175,4 @@ function EditInput(props: { initial: string; onSubmit: (t: string) => void; onCa
   );
 }
 
-// silence unused
 void IconSearch;

@@ -3,10 +3,11 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import type { FastifyInstance } from 'fastify';
 import Redis from 'ioredis';
 
-import { env } from '../config/env.ts';
-import { TokenService } from '../modules/auth/token.service.ts';
-import type { SocketContext } from './context.ts';
-import { registerHandlers } from './register.ts';
+import { env, corsOrigins } from '../config/env.js';
+import { TokenService } from '../modules/auth/token.service.js';
+import { TenantOriginsRepository } from '../modules/tenants/origins.repository.js';
+import type { SocketContext } from './context.js';
+import { registerHandlers } from './register.js';
 
 let io: SocketIOServer | null = null;
 
@@ -15,20 +16,45 @@ export function getIO(): SocketIOServer {
   return io;
 }
 
+export function tenantRoom(tenantId: number): string {
+  return `t:${tenantId}`;
+}
+export function userRoom(tenantId: number, userId: number): string {
+  return `t:${tenantId}:u:${userId}`;
+}
+export function conversationRoom(tenantId: number, conversationId: number): string {
+  return `t:${tenantId}:c:${conversationId}`;
+}
+
 export async function initSocketIO(app: FastifyInstance): Promise<SocketIOServer> {
+  const originsRepo = new TenantOriginsRepository(app.db);
+
+  async function isOriginAllowed(origin: string | undefined): Promise<boolean> {
+    if (!origin) return true; // non-browser clients (curl, mobile SDK)
+    if (corsOrigins.includes(origin)) return true;
+    try {
+      return await originsRepo.isAllowed(origin);
+    } catch {
+      return false;
+    }
+  }
+
   const server = new SocketIOServer(app.server, {
     path: '/socket.io',
     cors: {
-      origin: true,
+      origin: async (origin, cb) => {
+        const ok = await isOriginAllowed(origin);
+        if (!ok) app.log.warn({ origin }, 'socket.io CORS: origin not allowed');
+        cb(null, ok);
+      },
       credentials: true,
     },
     transports: ['websocket', 'polling'],
     pingInterval: 25_000,
     pingTimeout: 20_000,
-    maxHttpBufferSize: 1_000_000, // 1MB payload cap
+    maxHttpBufferSize: 1_000_000,
   });
 
-  // Redis adapter (multi-instance broadcasting)
   const pubClient = new Redis({
     host: env.REDIS_HOST,
     port: env.REDIS_PORT,
@@ -37,12 +63,11 @@ export async function initSocketIO(app: FastifyInstance): Promise<SocketIOServer
     keyPrefix: env.REDIS_KEY_PREFIX,
   });
   const subClient = pubClient.duplicate();
-
   server.adapter(createAdapter(pubClient, subClient));
 
   const tokens = new TokenService(app.db, app.redis);
 
-  // Auth handshake
+  // ---- Auth handshake ----
   server.use(async (socket, next) => {
     try {
       const auth = (socket.handshake.auth || {}) as { token?: string; deviceId?: string };
@@ -70,13 +95,12 @@ export async function initSocketIO(app: FastifyInstance): Promise<SocketIOServer
     }
   });
 
+  // ---- On connection ----
   server.on('connection', (socket: Socket) => {
     const ctx = socket.data.ctx as SocketContext;
-    const tenantRoom = `t:${ctx.tenantId}`;
-    const userRoom = `t:${ctx.tenantId}:u:${ctx.userId}`;
 
-    socket.join(tenantRoom);
-    socket.join(userRoom);
+    socket.join(tenantRoom(ctx.tenantId));
+    socket.join(userRoom(ctx.tenantId, ctx.userId));
 
     app.log.info(
       { socketId: socket.id, userId: ctx.userId, tenantId: ctx.tenantId },

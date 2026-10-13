@@ -22,6 +22,9 @@ export interface WidgetState {
   historyHasMoreByConversation: Record<number, boolean>;
   historyLoadingByConversation: Record<number, boolean>;
   unreadByConversation: Record<number, number>;
+
+  /** Message IDs I sent that the recipient has marked as read. */
+  readMessageIds: Set<number>;
 }
 
 type Listener = (state: WidgetState) => void;
@@ -45,6 +48,7 @@ const initialState: WidgetState = {
   historyHasMoreByConversation: {},
   historyLoadingByConversation: {},
   unreadByConversation: {},
+  readMessageIds: new Set(),
 };
 
 class Store {
@@ -64,10 +68,6 @@ class Store {
     return () => this.listeners.delete(listener);
   }
 
-    /**
-   * Wipe conversational state (used when switching users),
-   * but DO NOT touch auth tokens unless explicitly asked.
-   */
   resetConversationState(): void {
     this.set({
       conversations: [],
@@ -79,16 +79,14 @@ class Store {
       historyHasMoreByConversation: {},
       historyLoadingByConversation: {},
       unreadByConversation: {},
+      readMessageIds: new Set(),
       isLoading: false,
       error: null,
     });
   }
 
-  /**
-   * Full reset — used only on explicit logout.
-   */
   reset(): void {
-    this.state = { ...initialState, onlineUsers: new Set() };
+    this.state = { ...initialState, onlineUsers: new Set(), readMessageIds: new Set() };
     this.listeners.forEach((l) => l(this.state));
   }
 
@@ -195,8 +193,14 @@ class Store {
     });
   }
 
-  setUploadError(_clientId: string, _msg: string): void {
-    // reserved for future upload queue
+  /** Mark a list of message IDs as read by the recipient. */
+  markMessagesRead(ids: number[]): void {
+    if (ids.length === 0) return;
+    this.set((s) => {
+      const next = new Set(s.readMessageIds);
+      for (const id of ids) next.add(id);
+      return { readMessageIds: next };
+    });
   }
 }
 

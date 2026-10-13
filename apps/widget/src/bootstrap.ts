@@ -1,17 +1,19 @@
 import { ApiClient } from './services/api-client';
 import { SocketClient } from './services/socket-client';
+import { CallController } from './services/call-controller';
 import { bus } from './services/event-bus';
 import { store } from './state/store';
 import { sessionStore } from './services/session-store';
 import { notifications } from './services/notification-service';
 import { mountWidget } from './ui/root';
+
 import type { ChatWidgetConfig, WidgetEvent } from './types';
 
 const DEFAULT_FEATURES = {
   chat: true,
   groupChat: true,
-  audioCall: false,
-  videoCall: false,
+  audioCall: true,
+  videoCall: true,
   groupCall: false,
   fileUpload: true,
   voiceMessage: true,
@@ -27,6 +29,7 @@ const DEFAULT_FEATURES = {
 interface Runtime {
   api: ApiClient;
   socket: SocketClient;
+  call: CallController;
   host?: HTMLElement;
   config: ChatWidgetConfig;
   mounted: boolean;
@@ -38,9 +41,11 @@ let runtime: Runtime | null = null;
 function deriveApiBase(config: ChatWidgetConfig): string {
   return `${config.apiBaseUrl.replace(/\/$/, '')}/api/v1`;
 }
+
 function deriveSocketBase(config: ChatWidgetConfig): string {
   return config.apiBaseUrl.replace(/\/api\/v1\/?$/, '').replace(/\/$/, '');
 }
+
 function getOrCreateDeviceId(): string {
   const KEY = 'chat_widget_device_id';
   try {
@@ -50,18 +55,24 @@ function getOrCreateDeviceId(): string {
       localStorage.setItem(KEY, id);
     }
     return id;
-  } catch { return `w_${Math.random().toString(36).slice(2)}`; }
+  } catch {
+    return `w_${Math.random().toString(36).slice(2)}`;
+  }
 }
+
 function extractResetTokenFromUrl(): string | undefined {
   try {
     const url = new URL(window.location.href);
     return url.searchParams.get('reset') ?? undefined;
-  } catch { return undefined; }
+  } catch {
+    return undefined;
+  }
 }
 
 async function persistSession(rt: Runtime): Promise<void> {
   const s = store.get();
   if (!s.refreshToken || !s.me) return;
+
   await sessionStore.save({
     appId: rt.config.appId,
     origin: location.origin,
@@ -79,11 +90,12 @@ async function persistSession(rt: Runtime): Promise<void> {
 
 async function postAuthSetup(rt: Runtime): Promise<void> {
   store.set({ isLoading: true, error: null });
+
   try {
     const prefs = await rt.api.getNotificationPrefs();
     if (prefs) notifications.setPrefs(prefs);
 
-    // Ensure we have up-to-date "me" (with avatar)
+    // Ensure `me` is fresh (includes avatarUrl).
     const me = await rt.api.me();
     store.set({ me });
 
@@ -91,6 +103,7 @@ async function postAuthSetup(rt: Runtime): Promise<void> {
     store.set({ conversations, isLoading: false });
 
     rt.socket.connect();
+
     await mountShell(rt);
 
     bus.emit('ready', { user: store.get().me });
@@ -104,9 +117,11 @@ async function postAuthSetup(rt: Runtime): Promise<void> {
 
 async function mountShell(rt: Runtime): Promise<void> {
   if (rt.mounted) return;
+
   const { host } = mountWidget({
     api: rt.api,
     socket: rt.socket,
+    call: rt.call,
     primaryColor: rt.config.primaryColor ?? '#EC4899',
     position: rt.config.position ?? 'bottom-right',
     theme: rt.config.theme ?? 'auto',
@@ -120,30 +135,45 @@ async function mountShell(rt: Runtime): Promise<void> {
       void ChatWidget.logout();
     },
   });
+
   rt.host = host;
   rt.mounted = true;
 }
 
 export const ChatWidget = {
   async init(config: ChatWidgetConfig): Promise<void> {
-    if (!config?.apiBaseUrl) throw new Error('[ChatWidget] apiBaseUrl is required');
+    if (!config?.apiBaseUrl) {
+      throw new Error('[ChatWidget] apiBaseUrl is required');
+    }
+
+    const features = { ...DEFAULT_FEATURES, ...(config.features ?? {}) };
+    void features;
 
     const api = new ApiClient(deriveApiBase(config));
     const socket = new SocketClient(deriveSocketBase(config));
+    const call = new CallController(api, socket);
     const initialResetToken = extractResetTokenFromUrl();
 
-    const rt: Runtime = { api, socket, config, mounted: false, initialResetToken };
+    const rt: Runtime = {
+      api,
+      socket,
+      call,
+      config,
+      mounted: false,
+      initialResetToken,
+    };
     runtime = rt;
 
     await notifications.init();
 
-    // DO NOT reset store here — we may already have a session to reuse.
+    // Do NOT reset the store here — we may have a stored session.
     store.set({ isLoading: true, authStatus: 'authenticating', error: null });
 
-    // 1. Try session-based auto-login first
+    // ---------------------------------------------------------------
+    // 1. Session-based auto-login (refresh token in localStorage)
+    // ---------------------------------------------------------------
     const stored = await sessionStore.load(config.appId);
     if (stored && !initialResetToken) {
-      // Seed enough state for the refresh call to succeed
       store.set({
         refreshToken: stored.refreshToken,
         me: {
@@ -156,21 +186,35 @@ export const ChatWidget = {
           role: 'user',
         },
       });
+
       const ok = await api.refreshTokens();
       if (ok) {
         bus.emit('authenticated', { user: store.get().me });
         await postAuthSetup(rt);
         return;
       }
-      // Token invalid — clear and continue to fresh login
+
+      // Session invalid — clear it and try the next strategy.
       sessionStore.clear(config.appId);
       store.set({ refreshToken: null, me: null });
     }
 
-    // 2. Widget-token exchange
-    if (config.token) {
+    // ---------------------------------------------------------------
+    // 2. Credentials-based auto-login (config.autoLogin)
+    // ---------------------------------------------------------------
+    if (
+      !config.token &&
+      config.autoLogin?.username &&
+      config.autoLogin.password
+    ) {
       try {
-        const tokens = await api.exchangeWidgetToken(config.token, getOrCreateDeviceId());
+        const deviceId = getOrCreateDeviceId();
+        const tokens = await api.login({
+          tenantSlug: config.tenantSlug ?? 'default',
+          identifier: config.autoLogin.username,
+          password: config.autoLogin.password,
+          deviceId,
+        });
         store.setAuth(tokens);
         bus.emit('authenticated', { user: tokens.user });
         await persistSession(rt);
@@ -178,15 +222,41 @@ export const ChatWidget = {
         return;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console
+        console.warn('[ChatWidget] auto-login failed, falling back to form', msg);
+        // Fall through to widget-token / login-form handling.
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // 3. Widget-token exchange
+    // ---------------------------------------------------------------
+    if (config.token) {
+      try {
+        const tokens = await api.exchangeWidgetToken(
+          config.token,
+          getOrCreateDeviceId(),
+        );
+        store.setAuth(tokens);
+        bus.emit('authenticated', { user: tokens.user });
+        await persistSession(rt);
+        await postAuthSetup(rt);
+        return;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+
         if (config.allowLogin === false) {
           store.set({ isLoading: false, authStatus: 'idle', error: msg });
           bus.emit('error', { message: msg });
           throw err;
         }
+
         store.setNeedsAuth(msg);
       }
     } else if (config.allowLogin !== false) {
-      store.setNeedsAuth(initialResetToken ? 'Reset your password' : 'No token provided');
+      store.setNeedsAuth(
+        initialResetToken ? 'Reset your password' : 'No token provided',
+      );
     } else {
       const msg = 'No widget token provided and login fallback is disabled';
       store.set({ isLoading: false, authStatus: 'idle', error: msg });
@@ -199,26 +269,41 @@ export const ChatWidget = {
     bus.emit('needsAuth', {});
   },
 
-  open(): void { store.set({ isOpen: true }); },
-  close(): void { store.set({ isOpen: false }); },
-  minimize(): void { store.set({ isOpen: false }); },
+  // ---------------------------------------------------------------
+  // Widget visibility
+  // ---------------------------------------------------------------
+  open(): void {
+    store.set({ isOpen: true });
+  },
+  close(): void {
+    store.set({ isOpen: false });
+  },
+  minimize(): void {
+    store.set({ isOpen: false });
+  },
 
+  // ---------------------------------------------------------------
+  // Destroy
+  // ---------------------------------------------------------------
   destroy(): void {
     runtime?.socket.disconnect();
     runtime?.host?.remove();
-    if (runtime) sessionStore.clear(runtime.config.appId);
+
+    if (runtime) {
+      sessionStore.clear(runtime.config.appId);
+    }
+
     runtime = null;
     store.reset();
     bus.clear();
   },
 
-  /**
-   * Explicit logout: revoke session on server, clear local, show login screen.
-   */
+  // ---------------------------------------------------------------
+  // Logout (keeps the widget mounted and shows the login screen)
+  // ---------------------------------------------------------------
   async logout(): Promise<void> {
     if (!runtime) return;
 
-    // Best-effort server-side logout
     try {
       const refreshToken = store.get().refreshToken;
       const accessToken = store.get().accessToken;
@@ -233,31 +318,59 @@ export const ChatWidget = {
         });
       }
     } catch {
-      /* ignore */
+      /* ignore network errors */
     }
 
-    // Clear local session but KEEP the widget mounted
     sessionStore.clear(runtime.config.appId);
     runtime.socket.disconnect();
     store.reset();
-    store.set({
-      isOpen: true,
-      authStatus: 'needs-auth',
-      authError: null,
-    });
+    store.set({ isOpen: true, authStatus: 'needs-auth', authError: null });
     bus.emit('needsAuth', {});
   },
 
+  // ---------------------------------------------------------------
+  // Conversations
+  // ---------------------------------------------------------------
   openConversation(conversationId: number): void {
     store.set({ isOpen: true, activeConversationId: conversationId });
   },
 
+  // ---------------------------------------------------------------
+  // Notifications
+  // ---------------------------------------------------------------
   async requestNotificationPermission(): Promise<boolean> {
     return notifications.requestPermission();
   },
 
-  startAudioCall(_userId: number): void { /* Phase 7 */ },
-  startVideoCall(_userId: number): void { /* Phase 8 */ },
+  // ---------------------------------------------------------------
+  // Call helpers
+  // ---------------------------------------------------------------
+  async startAudioCall(conversationId: number): Promise<void> {
+    if (!runtime) return;
+    try {
+      await runtime.call.startOutgoing(conversationId, 'audio');
+    } catch (err) {
+      bus.emit('error', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  },
 
-  on(event: WidgetEvent, cb: (payload?: unknown) => void): void { bus.on(event, cb); },
+  async startVideoCall(conversationId: number): Promise<void> {
+    if (!runtime) return;
+    try {
+      await runtime.call.startOutgoing(conversationId, 'video');
+    } catch (err) {
+      bus.emit('error', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  },
+
+  // ---------------------------------------------------------------
+  // Events
+  // ---------------------------------------------------------------
+  on(event: WidgetEvent, cb: (payload?: unknown) => void): void {
+    bus.on(event, cb);
+  },
 };
